@@ -1,12 +1,16 @@
 # Data (lives on cluster)
-data/raw/
-data/clean/
+data/raw/*
+data/clean/*
+!data/raw/.gitkeep
+!data/clean/.gitkeep
 
 # SLURM logs
-slurm/logs/
+slurm/logs/*
+!slurm/logs/.gitkeep
 
 # Model output
-results/
+results/*
+!results/.gitkeep
 
 # macOS
 .DS_Store

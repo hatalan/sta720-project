@@ -1,0 +1,168 @@
+---
+title: "CTA Ridership — Initial Exploration"
+format:
+  html:
+    toc: true
+    code-fold: false
+execute:
+  warning: false
+  message: false
+---
+
+```{r setup}
+library(tidyverse)
+library(lubridate)
+library(skimr)
+```
+
+## Load
+
+```{r load}
+cta <- read_csv(
+  "../data/raw/cta-data.csv",
+  col_types = cols(
+    station_id  = col_integer(),
+    stationname = col_character(),
+    date        = col_character(),
+    daytype     = col_factor(levels = c("W", "A", "U")),
+    rides       = col_number()
+  )
+) |>
+  mutate(date = mdy(date))
+
+glimpse(cta)
+```
+
+## Shape & coverage
+
+```{r shape}
+cta |>
+  summarise(
+    n_rows       = n(),
+    n_stations   = n_distinct(station_id),
+    date_min     = min(date, na.rm = TRUE),
+    date_max     = max(date, na.rm = TRUE),
+    n_missing    = sum(is.na(rides))
+  )
+```
+
+## Overall summary
+
+```{r skim}
+skim(cta)
+```
+
+## Rides by day type
+
+`W` = weekday, `A` = Saturday, `U` = Sunday/holiday.
+
+```{r daytype}
+cta |>
+  group_by(daytype) |>
+  summarise(
+    n        = n(),
+    mean     = mean(rides),
+    median   = median(rides),
+    sd       = sd(rides),
+    p10      = quantile(rides, 0.10),
+    p90      = quantile(rides, 0.90)
+  )
+```
+
+## Busiest stations (by mean daily rides)
+
+```{r top-stations}
+cta |>
+  group_by(station_id, stationname) |>
+  summarise(mean_rides = mean(rides), n_days = n(), .groups = "drop") |>
+  arrange(desc(mean_rides)) |>
+  slice_head(n = 15)
+```
+
+## System-wide rides over time
+
+```{r system-ts}
+#| fig-width: 9
+#| fig-height: 4
+cta |>
+  group_by(date) |>
+  summarise(total = sum(rides), .groups = "drop") |>
+  ggplot(aes(date, total)) +
+  geom_line(alpha = 0.6) +
+  geom_smooth(se = FALSE) +
+  labs(x = NULL, y = "System-wide daily rides", title = "CTA total daily ridership")
+```
+
+## Distribution of rides
+
+```{r hist}
+#| fig-width: 7
+#| fig-height: 4
+cta |>
+  ggplot(aes(rides)) +
+  geom_histogram(bins = 60) +
+  scale_x_log10(labels = scales::comma) +
+  labs(x = "Rides per station-day (log10)", y = "Count")
+```
+
+## Collapse duplicate station-days
+
+The raw file has a small number of duplicated `(station_id, date)` rows (clustered in summer 2011). We collapse them by mean so the pivot has a unique key.
+
+```{r dedup}
+dup_count <- cta |>
+  count(station_id, date) |>
+  filter(n > 1) |>
+  nrow()
+
+cat("duplicate (station_id, date) pairs collapsed:", dup_count, "\n")
+
+cta_dedup <- cta |>
+  group_by(station_id, stationname, date, daytype) |>
+  summarise(rides = mean(rides), .groups = "drop")
+```
+
+## Reshape to wide (stations as columns)
+
+One row per date, one column per station. Using `station_id` for column names keeps them syntactically clean; a lookup table preserves the human-readable names.
+
+```{r wide}
+station_lookup <- cta_dedup |>
+  distinct(station_id, stationname) |>
+  arrange(station_id)
+
+cta_wide <- cta_dedup |>
+  select(date, station_id, rides) |>
+  pivot_wider(
+    names_from   = station_id,
+    values_from  = rides,
+    names_prefix = "s_",
+    names_sort   = TRUE
+  ) |>
+  arrange(date)
+
+dim(cta_wide)
+cta_wide[1:5, 1:6]
+```
+
+### Missingness per station (wide form)
+
+```{r wide-missing}
+cta_wide |>
+  summarise(across(starts_with("s_"), ~ sum(is.na(.)))) |>
+  pivot_longer(everything(), names_to = "station_id", values_to = "n_missing") |>
+  mutate(station_id = as.integer(sub("^s_", "", station_id))) |>
+  left_join(station_lookup, by = "station_id") |>
+  arrange(desc(n_missing)) |>
+  slice_head(n = 15)
+```
+
+## Write cleaned data
+
+```{r write}
+dir.create("../data/clean", showWarnings = FALSE, recursive = TRUE)
+write_csv(cta,            "../data/clean/cta-data.csv")
+write_csv(cta_wide,       "../data/clean/cta-data-wide.csv")
+write_csv(station_lookup, "../data/clean/station-lookup.csv")
+```
+

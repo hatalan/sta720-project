@@ -41,6 +41,8 @@ env/
 *_files/
 *_cache/
 /.quarto/
+cleaning/*.html
+notebooks/*.html
 
 # Editors
 .vscode/

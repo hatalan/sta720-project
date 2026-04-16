@@ -19,7 +19,7 @@ library(skimr)
 
 ```{r load}
 cta <- read_csv(
-  "../data/raw/cta-data.csv",
+  "../data/raw/cta/cta-data.csv",
   col_types = cols(
     station_id  = col_integer(),
     stationname = col_character(),
@@ -155,6 +155,80 @@ cta_wide |>
   left_join(station_lookup, by = "station_id") |>
   arrange(desc(n_missing)) |>
   slice_head(n = 15)
+```
+
+## Station correlation matrix
+
+How do stations' daily ridership move together? We compute pairwise correlations across the wide-form station columns, using pairwise-complete observations to handle missing days.
+
+```{r cor-compute}
+station_mat <- cta_wide |>
+  select(starts_with("s_")) |>
+  as.matrix()
+
+cor_mat <- cor(station_mat, use = "pairwise.complete.obs")
+
+# Drop stations that produce any NA correlations (insufficient overlap with others)
+keep <- !apply(cor_mat, 1, anyNA)
+cat("stations dropped due to NA correlations:", sum(!keep), "\n")
+cor_mat <- cor_mat[keep, keep]
+
+dim(cor_mat)
+summary(cor_mat[lower.tri(cor_mat)])
+```
+
+### Heatmap (hierarchically clustered)
+
+Ordering rows/columns by hierarchical clustering groups stations whose ridership patterns move together.
+
+```{r cor-heatmap}
+#| fig-width: 9
+#| fig-height: 8
+hc_order <- hclust(as.dist(1 - cor_mat))$order
+cor_ordered <- cor_mat[hc_order, hc_order]
+
+cor_long <- as_tibble(cor_ordered, rownames = "station_a") |>
+  pivot_longer(-station_a, names_to = "station_b", values_to = "cor") |>
+  mutate(
+    station_a = factor(station_a, levels = rownames(cor_ordered)),
+    station_b = factor(station_b, levels = colnames(cor_ordered))
+  )
+
+ggplot(cor_long, aes(station_a, station_b, fill = cor)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "#2166ac", mid = "white", high = "#b2182b",
+                       midpoint = 0, limits = c(-1, 1)) +
+  labs(x = NULL, y = NULL, fill = "Pearson r",
+       title = "CTA station ridership correlation (clustered)") +
+  theme_minimal() +
+  theme(axis.text = element_blank(), axis.ticks = element_blank(),
+        panel.grid = element_blank())
+```
+
+### Most- and least-correlated station pairs
+
+```{r cor-pairs}
+cor_pairs <- cor_mat
+cor_pairs[upper.tri(cor_pairs, diag = TRUE)] <- NA
+
+pair_tbl <- as_tibble(cor_pairs, rownames = "a") |>
+  pivot_longer(-a, names_to = "b", values_to = "cor") |>
+  drop_na(cor) |>
+  mutate(
+    a_id = as.integer(sub("^s_", "", a)),
+    b_id = as.integer(sub("^s_", "", b))
+  ) |>
+  left_join(station_lookup, by = c("a_id" = "station_id")) |>
+  rename(a_name = stationname) |>
+  left_join(station_lookup, by = c("b_id" = "station_id")) |>
+  rename(b_name = stationname) |>
+  select(a_name, b_name, cor)
+
+# Top 10 most correlated
+pair_tbl |> arrange(desc(cor)) |> slice_head(n = 10)
+
+# Bottom 10 (least / most negatively correlated)
+pair_tbl |> arrange(cor) |> slice_head(n = 10)
 ```
 
 ## Write cleaned data

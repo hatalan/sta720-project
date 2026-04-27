@@ -132,7 +132,7 @@ station_lookup <- cta_dedup |>
   arrange(station_id)
 
 cta_wide <- cta_dedup |>
-  select(date, station_id, rides) |>
+  select(date, station_id, rides, daytype) |>
   pivot_wider(
     names_from   = station_id,
     values_from  = rides,
@@ -242,10 +242,10 @@ cta_station_map <- read_csv("../data/raw/cta/cta-station-map.csv") %>%
 keep_cols <- cta_station_map %>%
   filter(RED == TRUE)
 cta_wide_red <- cta_wide %>% 
-  select(date, all_of(paste0("s_", keep_cols$MAP_ID)))
+  select(date, daytype, all_of(paste0("s_", keep_cols$MAP_ID)))
 
 cta_wide_red_limited <- cta_wide_red %>%
-  select(date, s_41170, s_40910, s_40990, s_41660)
+  select(date, daytype, )
 
 cta_wide_red_limited_mat <- cta_wide_red_limited |>
   select(starts_with("s_")) |>
@@ -254,6 +254,37 @@ cta_wide_red_limited_mat <- cta_wide_red_limited |>
 cor_mat <- cor(cta_wide_red_limited_mat, method = "pearson", use = "pairwise.complete.obs")
 
 cor_mat
+```
+
+## Graphing test red line data
+
+```{r}
+cta_red_long <- cta_wide_red %>%
+  pivot_longer(cols = -c(date, daytype), names_to = "station", values_to = "rides")  %>%
+  mutate(month = floor_date(date, "month")) %>%
+  group_by(month, station) %>%
+  summarise(rides = mean(rides, na.rm = TRUE)) %>%
+  ungroup()  %>%
+  group_by(station) %>%
+  mutate(rides_diff = rides - lag(rides)) %>%
+  ungroup()
+
+ggplot(cta_red_long, aes(x = month, y = rides_diff, color = station)) +
+  geom_line()
+
+cta_red_wide <- cta_red_long %>%
+  select(month, station, rides_diff) %>%
+  pivot_wider(
+    names_from   = station,
+    values_from  = rides_diff,
+    names_sort   = TRUE
+  ) %>%
+  filter(month >= as.Date("2015-01-01"), month <= as.Date("2025-01-01")) %>%
+  select(-month)
+
+cta_red_mat <- as.matrix(cta_red_wide)
+
+cor(cta_red_wide)
 ```
 
 ## Write cleaned data

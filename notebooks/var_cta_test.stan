@@ -17,7 +17,6 @@ model {
     to_vector(A_1) ~ normal(0, 10);
     to_vector(A_2) ~ normal(0, 10);
 
-// We should talk about priors on the covariance matrix (LKJ vs. inverse-Wishart?)
     sigma ~ normal(0, 10);
     Rho ~ lkj_corr(2);
     for(t in 3:T) {

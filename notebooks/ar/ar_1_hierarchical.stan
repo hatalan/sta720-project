@@ -6,7 +6,7 @@ data {
 
 parameters {
   real gamma; // population intercept 
-  real delta; // population coefficient
+  real <lower=0, upper=1> delta; // population coefficient
 
   vector[K] c;              // node intercepts
   vector[K] beta;           // node coefficients
@@ -26,17 +26,17 @@ model {
   mu_sigma ~ normal(0, 2);
   tau_sigma ~ normal(0, 1);
 
-  // Minnesota-like priors
+  // Hierarchical priors
   gamma ~ normal(0, 1);
-  delta ~ normal(1, 1);
-  c ~ normal(0, lambda_c);              // no constant shock
-  beta ~ normal(0, lambda_beta);        // shrink towards 0 (random-walk)     
+  delta ~ beta(3.5, 2);
+  c ~ normal(gamma, lambda_c);             
+  beta ~ normal(delta, lambda_beta);            
   sigma ~ normal(mu_sigma, tau_sigma);
 
   // Likelihood
   for (k in 1:K) {
     for (t in 2:T) {
-      Y[t, k] ~ normal(delta + gamma * Y[t-1, k] + c[k] + beta[k] * Y[t-1, k], sigma[k]);
+      Y[t, k] ~ normal(c[k] + beta[k] * Y[t-1, k], sigma[k]);
     }
   }
 }

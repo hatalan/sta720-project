@@ -1,5 +1,5 @@
 data {
-  int<lower=0> T;
+  int<lower=1> T;
   vector[T] y;
 }
 

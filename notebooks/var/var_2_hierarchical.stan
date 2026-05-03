@@ -18,16 +18,16 @@ parameters {
     vector<lower=0>[K] sigma;
     corr_matrix[K] Rho;
     
-    real<lower=0> lambda;        // overall tightness
-    real<lower=0, upper=1> theta; // cross-equation relative tightness
+    real<lower=0> lambda;        
+    real<lower=0, upper=1> theta; 
 }
 
 model {
-    // --- Hyperpriors ---
+    // Hyperpriors
     lambda ~ gamma(2, 10);
     theta ~  beta(2, 2);
     
-    // --- Priors on innovation scale and correlation ---
+    // Priors on innovation matrix
     sigma ~ normal(0, 1);
     Rho ~ lkj_corr(2);
     

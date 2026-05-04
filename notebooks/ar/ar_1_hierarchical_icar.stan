@@ -1,59 +1,47 @@
 data {
-  int<lower=1> T;           // number of time periods
-  int<lower=1> K;           // number of nodes
-  matrix[T, K] Y;           // data
-
+  int<lower=1> T;
+  int<lower=1> K;
+  matrix[T, K] Y;
+  
   int<lower=0> N_edges;
-  array[N_edges] int<lower=1, upper=K> node1; // node1[i] adjacent to node2[i]
-  array[N_edges] int<lower=1, upper=K> node2; // and node1[i] < node2[i]
+  array[N_edges] int<lower=1, upper=K> node1;
+  array[N_edges] int<lower=1, upper=K> node2;
 }
 
 parameters {
-  real gamma;                   // population intercept
-  real<lower=0, upper=1> delta; // population AR coefficient
+  real gamma;                   // population mean intercept
+  vector[K] c_zero;              // station intercept deviations
+  real<lower=0> sigma_c;        // SD on intercept deviations
 
-  vector[K] phi_c;             // ICAR spatial effects for intercepts
-  vector[K] phi_beta;          // ICAR spatial effects for coefficients
-  vector<lower=0>[K] sigma;    // node innovation standard deviation
-
-  // Hyperparameters
-  real<lower=0> tau_c;         // precision of ICAR for intercepts
-  real<lower=0> tau_beta;      // precision of ICAR for coefficients
-  real<lower=0> mu_sigma;      // mean of sigma hyperprior
-  real<lower=0> tau_sigma;     // scale of sigma hyperprior
+  real delta;                   // population mean AR coefficient
+  vector[K] phi_zero;            // station spatial coefficient deviations
+  real<lower=0> sigma_phi;      // SD on spatial coefficient deviations
+  
+  vector<lower=0>[K] sigma;
 }
 
 transformed parameters {
-  vector[K] c = gamma + phi_c;
-  vector[K] beta = delta + phi_beta;
+  vector[K] c = gamma + sigma_c * c_zero;
+  vector[K] beta = delta + sigma_phi * phi_zero;
 }
 
 model {
-  // Population priors
-  gamma ~ normal(0, 1);
-  delta ~ beta(3.5, 2);
-
-  // Hyperpriors
-  tau_c ~ gamma(2, 0.75);
-  tau_beta ~ gamma(2, 0.75);
-  mu_sigma ~ normal(0, 2);
-  tau_sigma ~ normal(0, 1);
-
-  // ICAR priors on spatial deviations
-  target += -0.5 * tau_c * dot_self(phi_c[node1] - phi_c[node2]);
-  target += -0.5 * tau_beta * dot_self(phi_beta[node1] - phi_beta[node2]);
-
-  // Sum-to-zero constraints for identifiability
-  sum(phi_c) ~ normal(0, 0.001 * K);
-  sum(phi_beta) ~ normal(0, 0.001 * K);
-
-  // Sigma prior
-  sigma ~ normal(mu_sigma, tau_sigma);
-
+  gamma ~ normal(0, 1); // population mean intercept hyperprior
+  delta ~ normal(0.3, 0.3); // population mean AR coefficient hyperprior
+  
+  sigma_c ~ normal(0, 1); // population intercept SD hyperprior
+  sigma_phi ~ normal(0, 0.3); // population AR coefficient SD hyperprior
+  
+  c_zero ~ normal(0, 1);
+  
+  // ICAR prior
+  target += -0.5 * dot_self(phi_zero[node1] - phi_zero[node2]);
+  sum(phi_zero) ~ normal(0, 0.001 * K);
+  
+  sigma ~ normal(0, 1); // simple half-normal prior on innovation
+  
   // Likelihood
   for (k in 1:K) {
-    for (t in 2:T) {
-      Y[t, k] ~ normal(c[k] + beta[k] * Y[t-1, k], sigma[k]);
-    }
+    Y[2:T, k] ~ normal(c[k] + beta[k] * Y[1:(T-1), k], sigma[k]);
   }
 }

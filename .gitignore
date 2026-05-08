@@ -11,6 +11,7 @@ slurm/logs/*
 # Model output
 results/*
 !results/.gitkeep
+*_output/
 
 # macOS
 .DS_Store

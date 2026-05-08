@@ -1,5 +1,5 @@
 ---
-title: "CTA Ridership — Initial Exploration"
+title: "CTA Ridership — Data Cleaning"
 format:
   html:
     toc: true
@@ -12,12 +12,13 @@ execute:
 ```{r setup}
 library(tidyverse)
 library(lubridate)
-library(skimr)
+library(tseries)
+library(igraph)
 ```
 
-## Load
+## Load ridership data
 
-```{r load}
+```{r load-ridership}
 cta <- read_csv(
   "../data/raw/cta/cta-data.csv",
   col_types = cols(
@@ -29,102 +30,86 @@ cta <- read_csv(
   )
 ) |>
   mutate(date = mdy(date))
-
-glimpse(cta)
 ```
 
-## Shape & coverage
+## Load GTFS and build adjacency matrix
 
-```{r shape}
-cta |>
-  summarise(
-    n_rows       = n(),
-    n_stations   = n_distinct(station_id),
-    date_min     = min(date, na.rm = TRUE),
-    date_max     = max(date, na.rm = TRUE),
-    n_missing    = sum(is.na(rides))
-  )
+Source: <https://www.transitchicago.com/developers/gtfs/>
+
+```{r load-gtfs}
+routes     <- read_csv("../data/raw/cta/routes.txt")
+trips      <- read_csv("../data/raw/cta/trips.txt")
+stop_times <- read_csv("../data/raw/cta/stop_times.txt")
+stops      <- read_csv("../data/raw/cta/stops.txt")
 ```
 
-## Overall summary
+```{r build-adjacency}
+rail_routes <- routes |>
+  filter(route_type == 1) |>
+  select(route_id, route_long_name)
 
-```{r skim}
-skim(cta)
-```
+rail_trips <- trips |>
+  semi_join(rail_routes, by = "route_id") |>
+  group_by(route_id, direction_id) |>
+  slice_min(trip_id, n = 1) |>
+  ungroup() |>
+  select(route_id, trip_id, direction_id, direction)
 
-## Rides by day type
+rail_stop_times <- stop_times |>
+  semi_join(rail_trips, by = "trip_id") |>
+  arrange(trip_id, stop_sequence) |>
+  select(trip_id, stop_sequence, stop_id)
 
-`W` = weekday, `A` = Saturday, `U` = Sunday/holiday.
+stop_parents <- stops |>
+  filter(location_type == 0, !is.na(parent_station)) |>
+  select(stop_id, parent_station)
 
-```{r daytype}
-cta |>
-  group_by(daytype) |>
-  summarise(
-    n        = n(),
-    mean     = mean(rides),
-    median   = median(rides),
-    sd       = sd(rides),
-    p10      = quantile(rides, 0.10),
-    p90      = quantile(rides, 0.90)
-  )
-```
+rail_stations <- rail_stop_times |>
+  left_join(stop_parents, by = "stop_id") |>
+  left_join(rail_trips |> select(trip_id, route_id), by = "trip_id")
 
-## Busiest stations (by mean daily rides)
+edges_all <- rail_stations |>
+  arrange(trip_id, stop_sequence) |>
+  group_by(trip_id) |>
+  mutate(next_station = lead(parent_station)) |>
+  ungroup() |>
+  filter(!is.na(next_station), parent_station != next_station) |>
+  select(route_id, node1 = parent_station, node2 = next_station)
 
-```{r top-stations}
-cta |>
-  group_by(station_id, stationname) |>
-  summarise(mean_rides = mean(rides), n_days = n(), .groups = "drop") |>
-  arrange(desc(mean_rides)) |>
-  slice_head(n = 15)
-```
+edges <- edges_all |>
+  mutate(
+    a = pmin(node1, node2),
+    b = pmax(node1, node2)
+  ) |>
+  distinct(a, b) |>
+  rename(node1 = a, node2 = b) |>
+  arrange(node1, node2)
 
-## System-wide rides over time
+all_nodes <- sort(unique(c(edges$node1, edges$node2)))
+K <- length(all_nodes)
+W <- matrix(0L, nrow = K, ncol = K,
+            dimnames = list(all_nodes, all_nodes))
 
-```{r system-ts}
-#| fig-width: 9
-#| fig-height: 4
-cta |>
-  group_by(date) |>
-  summarise(total = sum(rides), .groups = "drop") |>
-  ggplot(aes(date, total)) +
-  geom_line(alpha = 0.6) +
-  geom_smooth(se = FALSE) +
-  labs(x = NULL, y = "System-wide daily rides", title = "CTA total daily ridership")
-```
+for (i in seq_len(nrow(edges))) {
+  a <- as.character(edges$node1[i])
+  b <- as.character(edges$node2[i])
+  W[a, b] <- 1L
+  W[b, a] <- 1L
+}
 
-## Distribution of rides
-
-```{r hist}
-#| fig-width: 7
-#| fig-height: 4
-cta |>
-  ggplot(aes(rides)) +
-  geom_histogram(bins = 60) +
-  scale_x_log10(labels = scales::comma) +
-  labs(x = "Rides per station-day (log10)", y = "Count")
+cat("Adjacency matrix:", K, "x", K, "\n")
+cat("Edges:", nrow(edges), "\n")
 ```
 
 ## Collapse duplicate station-days
 
-The raw file has a small number of duplicated `(station_id, date)` rows (clustered in summer 2011). We collapse them by mean so the pivot has a unique key.
-
 ```{r dedup}
-dup_count <- cta |>
-  count(station_id, date) |>
-  filter(n > 1) |>
-  nrow()
-
-cat("duplicate (station_id, date) pairs collapsed:", dup_count, "\n")
-
 cta_dedup <- cta |>
   group_by(station_id, stationname, date, daytype) |>
   summarise(rides = mean(rides), .groups = "drop")
 ```
 
-## Reshape to wide (stations as columns)
-
-One row per date, one column per station. Using `station_id` for column names keeps them syntactically clean; a lookup table preserves the human-readable names.
+## Reshape to weekly wide format
 
 ```{r wide}
 station_lookup <- cta_dedup |>
@@ -132,23 +117,20 @@ station_lookup <- cta_dedup |>
   arrange(station_id)
 
 cta_wide <- cta_dedup |>
-  select(date, station_id, rides, daytype) |>
+  select(date, station_id, rides) |>
+  mutate(week = floor_date(date, "week")) |>
+  group_by(week, station_id) |>
+  summarise(rides = mean(rides, na.rm = TRUE), .groups = "drop") |>
   pivot_wider(
     names_from   = station_id,
     values_from  = rides,
     names_prefix = "s_",
     names_sort   = TRUE
   ) |>
-  arrange(date) |>
+  filter(week >= as.Date("2021-01-01"), week < as.Date("2025-01-01")) |>
+  arrange(week) |>
   mutate(
-    dow = wday(date, week_start = 1),   # 1 = Mon … 7 = Sun
-    dow_tue = as.integer(dow == 2),
-    dow_wed = as.integer(dow == 3),
-    dow_thu = as.integer(dow == 4),
-    dow_fri = as.integer(dow == 5),
-    dow_sat = as.integer(dow == 6),
-    dow_sun = as.integer(dow == 7),
-    mon     = month(date),
+    mon     = month(week),
     mon_feb = as.integer(mon == 2),
     mon_mar = as.integer(mon == 3),
     mon_apr = as.integer(mon == 4),
@@ -161,159 +143,187 @@ cta_wide <- cta_dedup |>
     mon_nov = as.integer(mon == 11),
     mon_dec = as.integer(mon == 12)
   ) |>
-  select(-dow, -mon)
-
-dim(cta_wide)
-cta_wide[1:5, 1:6]
+  select(-mon)
 ```
 
-### Missingness per station (wide form)
+## Stations with high missingness
 
-```{r wide-missing}
+```{r high-missing}
 cta_wide |>
   summarise(across(starts_with("s_"), ~ sum(is.na(.)))) |>
-  pivot_longer(everything(), names_to = "station_id", values_to = "n_missing") |>
-  mutate(station_id = as.integer(sub("^s_", "", station_id))) |>
+  pivot_longer(everything(), names_to = "station", values_to = "n_missing") |>
+  filter(n_missing > 0) |>
+  mutate(station_id = as.integer(sub("^s_", "", station))) |>
   left_join(station_lookup, by = "station_id") |>
-  arrange(desc(n_missing)) |>
-  slice_head(n = 15)
+  select(station, stationname, n_missing) |>
+  arrange(desc(n_missing))
 ```
 
-## Station correlation matrix
+## Drop closed stations and bridge neighbors
 
-How do stations' daily ridership move together? We compute pairwise correlations across the wide-form station columns, using pairwise-complete observations to handle missing days.
+Berwyn, Lawrence, and Damen-Lake are dropped due to extended closures (RPM renovation). Their neighbors are connected to maintain graph connectivity.
 
-```{r cor-compute}
-station_mat <- cta_wide |>
-  select(starts_with("s_")) |>
-  as.matrix()
+```{r drop-bridge}
+drop_names <- c("Berwyn", "Lawrence", "Damen-Lake")
+drop_ids <- station_lookup |>
+  filter(str_detect(stationname, paste(drop_names, collapse = "|"))) |>
+  pull(station_id) |>
+  as.character()
 
-cor_mat <- cor(station_mat, use = "pairwise.complete.obs")
+cat("Dropping stations:\n")
+station_lookup |>
+  filter(station_id %in% as.integer(drop_ids))
 
-# Drop stations that produce any NA correlations (insufficient overlap with others)
-keep <- !apply(cor_mat, 1, anyNA)
-cat("stations dropped due to NA correlations:", sum(!keep), "\n")
-cor_mat <- cor_mat[keep, keep]
+# Bridge neighbors before removing
+for (sid in drop_ids) {
+  neighbors <- which(W[sid, ] == 1L)
+  if (length(neighbors) >= 2) {
+    neighbor_names <- names(neighbors)
+    for (i in seq_along(neighbor_names)) {
+      for (j in seq_along(neighbor_names)) {
+        if (i < j) {
+          W[neighbor_names[i], neighbor_names[j]] <- 1L
+          W[neighbor_names[j], neighbor_names[i]] <- 1L
+        }
+      }
+    }
+  }
+}
 
-dim(cor_mat)
-summary(cor_mat[lower.tri(cor_mat)])
+# Remove dropped stations from adjacency matrix
+keep_nodes <- setdiff(rownames(W), drop_ids)
+W <- W[keep_nodes, keep_nodes]
+
+# Remove from ridership data
+cta_wide <- cta_wide |>
+  select(-any_of(paste0("s_", drop_ids)))
+
+cat("\nAdjacency matrix after dropping:", nrow(W), "x", ncol(W), "\n")
 ```
 
-### Heatmap (hierarchically clustered)
+## Filter to intersection of ridership and adjacency stations
 
-Ordering rows/columns by hierarchical clustering groups stations whose ridership patterns move together.
+```{r filter-intersect}
+adj_stations <- paste0("s_", rownames(W))
+all_stations <- names(cta_wide) |> str_subset("^s_")
 
-```{r cor-heatmap}
-#| fig-width: 9
-#| fig-height: 8
-hc_order <- hclust(as.dist(1 - cor_mat))$order
-cor_ordered <- cor_mat[hc_order, hc_order]
+in_rides_not_adj <- setdiff(all_stations, adj_stations)
+in_adj_not_rides <- setdiff(adj_stations, all_stations)
 
-cor_long <- as_tibble(cor_ordered, rownames = "station_a") |>
-  pivot_longer(-station_a, names_to = "station_b", values_to = "cor") |>
+cat("Stations in both:", length(intersect(all_stations, adj_stations)), "\n")
+cat("In ridership but not adjacency:", length(in_rides_not_adj), "\n")
+cat("In adjacency but not ridership:", length(in_adj_not_rides), "\n")
+
+if (length(in_rides_not_adj) > 0) {
+  cat("\n--- In ridership but not adjacency ---\n")
+  station_lookup |>
+    filter(station_id %in% as.integer(sub("^s_", "", in_rides_not_adj)))
+}
+
+if (length(in_adj_not_rides) > 0) {
+  cat("\n--- In adjacency but not ridership ---\n")
+  station_lookup |>
+    filter(station_id %in% as.integer(sub("^s_", "", in_adj_not_rides)))
+}
+
+# Filter both to intersection
+kept_ids <- intersect(
+  as.integer(sub("^s_", "", all_stations)),
+  as.integer(rownames(W))
+) |> as.character()
+
+W <- W[kept_ids, kept_ids]
+cta_wide <- cta_wide |>
+  select(week, starts_with("mon_"), all_of(paste0("s_", kept_ids)))
+
+# Connectivity check
+g <- graph_from_adjacency_matrix(W, mode = "undirected", diag = FALSE)
+cat("\nConnected:", is_connected(g), "\n")
+cat("Components:", components(g)$no, "\n")
+cat("Final station count:", nrow(W), "\n")
+```
+
+## Missingness check
+
+```{r missing}
+missing_by_station <- cta_wide |>
+  summarise(across(starts_with("s_"), ~ sum(is.na(.)))) |>
+  pivot_longer(everything(), names_to = "station", values_to = "n_missing") |>
+  filter(n_missing > 0) |>
+  arrange(desc(n_missing))
+
+zeros_by_station <- cta_wide |>
+  summarise(across(starts_with("s_"), ~ sum(. == 0, na.rm = TRUE))) |>
+  pivot_longer(everything(), names_to = "station", values_to = "n_zeros") |>
+  filter(n_zeros > 0) |>
+  arrange(desc(n_zeros))
+
+cat("Stations with any NAs:", nrow(missing_by_station), "/",
+    sum(str_starts(names(cta_wide), "s_")), "\n")
+cat("Total missing cells:", sum(missing_by_station$n_missing), "\n")
+cat("Stations with any zeros:", nrow(zeros_by_station), "\n")
+cat("Total zero cells:", sum(zeros_by_station$n_zeros), "\n\n")
+
+issues <- full_join(
+  missing_by_station,
+  zeros_by_station,
+  by = "station"
+) |>
   mutate(
-    station_a = factor(station_a, levels = rownames(cor_ordered)),
-    station_b = factor(station_b, levels = colnames(cor_ordered))
-  )
-
-ggplot(cor_long, aes(station_a, station_b, fill = cor)) +
-  geom_tile() +
-  scale_fill_gradient2(low = "#2166ac", mid = "white", high = "#b2182b",
-                       midpoint = 0, limits = c(-1, 1)) +
-  labs(x = NULL, y = NULL, fill = "Pearson r",
-       title = "CTA station ridership correlation (clustered)") +
-  theme_minimal() +
-  theme(axis.text = element_blank(), axis.ticks = element_blank(),
-        panel.grid = element_blank())
-```
-
-### Most- and least-correlated station pairs
-
-```{r cor-pairs}
-cor_pairs <- cor_mat
-cor_pairs[upper.tri(cor_pairs, diag = TRUE)] <- NA
-
-pair_tbl <- as_tibble(cor_pairs, rownames = "a") |>
-  pivot_longer(-a, names_to = "b", values_to = "cor") |>
-  drop_na(cor) |>
-  mutate(
-    a_id = as.integer(sub("^s_", "", a)),
-    b_id = as.integer(sub("^s_", "", b))
+    station_id = as.integer(sub("^s_", "", station)),
+    n_missing = replace_na(n_missing, 0L),
+    n_zeros   = replace_na(n_zeros, 0L)
   ) |>
-  left_join(station_lookup, by = c("a_id" = "station_id")) |>
-  rename(a_name = stationname) |>
-  left_join(station_lookup, by = c("b_id" = "station_id")) |>
-  rename(b_name = stationname) |>
-  select(a_name, b_name, cor)
+  left_join(station_lookup, by = "station_id") |>
+  select(station, stationname, n_missing, n_zeros) |>
+  arrange(desc(n_missing + n_zeros))
 
-# Top 10 most correlated
-pair_tbl |> arrange(desc(cor)) |> slice_head(n = 10)
-
-# Bottom 10 (least / most negatively correlated)
-pair_tbl |> arrange(cor) |> slice_head(n = 10)
+if (nrow(issues) > 0) issues
 ```
 
-## Load data from cta-station-map data and extract red line stations
+## Impute zeros
 
-```{r}
-cta_station_map <- read_csv("../data/raw/cta/cta-station-map.csv") %>%
-  group_by(MAP_ID) %>%
-  summarise(across(everything(), any)) %>%
-  select(MAP_ID, ADA:O)
-
-keep_cols <- cta_station_map %>%
-  filter(RED == TRUE)
-cta_wide_red <- cta_wide %>% 
-  select(date, daytype, all_of(paste0("s_", keep_cols$MAP_ID)))
-
-cta_wide_red_limited <- cta_wide_red %>%
-  select(-date, -daytype)
-
-cta_wide_red_limited_mat <- cta_wide_red_limited |>
-  select(starts_with("s_")) |>
-  as.matrix()
-
-cor_mat <- cor(cta_wide_red_limited_mat, method = "pearson", use = "pairwise.complete.obs")
-
-cor_mat
+```{r impute-zeros}
+cta_wide <- cta_wide |>
+  mutate(across(starts_with("s_"), ~ if_else(. == 0, 0.5, .)))
 ```
 
-## Graphing test red line data
+## Log first difference
 
-```{r}
-cta_long_red <- cta_wide_red %>%
-  pivot_longer(cols = -c(date, daytype), names_to = "station", values_to = "rides")  %>%
-  mutate(week = floor_date(date, "week")) %>%
-  group_by(week, station) %>%
-  summarise(rides = mean(rides, na.rm = TRUE)) %>%
-  ungroup()  %>%
-  group_by(station) %>%
-  mutate(rides_diff = rides - lag(rides)) %>%
-  ungroup()
+```{r log-diff}
+cta_wide <- cta_wide |>
+  mutate(across(starts_with("s_"), ~ log(.x) - lag(log(.x)))) |>
+  slice(-1)
+```
 
-ggplot(cta_long_red, aes(x = week, y = rides_diff, color = station)) +
-  geom_line()
+## Stationarity assessment
 
-cta_wide_red_weekly <- cta_long_red %>%
-  select(week, station, rides_diff) %>%
-  pivot_wider(
-    names_from   = station,
-    values_from  = rides_diff,
-    names_sort   = TRUE
-  ) %>%
-  filter(week >= as.Date("2015-01-01"), week < as.Date("2025-01-01"))
+### Time series plots
 
-# cta_red_mat <- as.matrix(cta_wide_red_weekly)
-# cor(cta_wide_red_weekly)
+```{r ts-plots}
+#| fig-width: 9
+#| fig-height: 6
+sample_stations <- names(cta_wide) |>
+  str_subset("^s_") |>
+  sample(6)
+
+cta_wide |>
+  select(week, all_of(sample_stations)) |>
+  pivot_longer(-week, names_to = "station", values_to = "log_diff") |>
+  ggplot(aes(week, log_diff)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~station, scales = "free_y") +
+  labs(x = NULL, y = "Log first difference", title = "Sample station series")
 ```
 
 ## Write cleaned data
 
 ```{r write}
+cta_adjacency <- as.data.frame(W) |>
+  rownames_to_column("station_id")
+
 dir.create("../data/clean", showWarnings = FALSE, recursive = TRUE)
-write_csv(cta,            "../data/clean/cta-data.csv")
 write_csv(cta_wide,       "../data/clean/cta-data-wide.csv")
-write_csv(cta_wide_red_weekly, "../data/clean/cta-data-red-weekly.csv")
+write_csv(cta_adjacency,  "../data/clean/cta-adjacency.csv")
 write_csv(station_lookup, "../data/clean/station-lookup.csv")
 ```
-

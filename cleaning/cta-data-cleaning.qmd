@@ -139,7 +139,29 @@ cta_wide <- cta_dedup |>
     names_prefix = "s_",
     names_sort   = TRUE
   ) |>
-  arrange(date)
+  arrange(date) |>
+  mutate(
+    dow = wday(date, week_start = 1),   # 1 = Mon … 7 = Sun
+    dow_tue = as.integer(dow == 2),
+    dow_wed = as.integer(dow == 3),
+    dow_thu = as.integer(dow == 4),
+    dow_fri = as.integer(dow == 5),
+    dow_sat = as.integer(dow == 6),
+    dow_sun = as.integer(dow == 7),
+    mon     = month(date),
+    mon_feb = as.integer(mon == 2),
+    mon_mar = as.integer(mon == 3),
+    mon_apr = as.integer(mon == 4),
+    mon_may = as.integer(mon == 5),
+    mon_jun = as.integer(mon == 6),
+    mon_jul = as.integer(mon == 7),
+    mon_aug = as.integer(mon == 8),
+    mon_sep = as.integer(mon == 9),
+    mon_oct = as.integer(mon == 10),
+    mon_nov = as.integer(mon == 11),
+    mon_dec = as.integer(mon == 12)
+  ) |>
+  select(-dow, -mon)
 
 dim(cta_wide)
 cta_wide[1:5, 1:6]

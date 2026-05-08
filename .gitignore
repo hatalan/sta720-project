@@ -11,7 +11,10 @@ slurm/logs/*
 # Model output
 results/*
 !results/.gitkeep
+!results/*.qmd
 *_output/
+output/
+*.pdf
 
 # macOS
 .DS_Store

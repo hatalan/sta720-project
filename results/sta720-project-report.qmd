@@ -1,0 +1,110 @@
+---
+title: "STA 720: Bayesian Analysis - Final Project Report"
+author: "Nicholas Hatala"
+execute:
+  warning: false
+  message: false  # Recommended to also hide package loading messages
+format:
+  pdf:
+    colorlinks: true
+    linkcolor: "RoyalBlue"
+    urlcolor: "RoyalBlue"
+    citecolor: "RoyalBlue"
+editor: visual
+---
+
+```{r, echo=FALSE}
+#| message: false
+#| warning: false
+
+library(tidyverse)
+library(ggplot2)
+
+posterior <- read_csv(
+  "../notebooks/ar/ar_mod_cta_icar_seas_output/ar_1_hier_icar_seas-20260508103954_1.csv",
+  comment = "#"
+)
+
+ppc <- read_csv(
+  "../notebooks/ar/ar_mod_cta_icar_seas_output/ppc_summary.csv"
+)
+```
+
+## I. Introduction
+This applied project aims to implement a Bayesian hierarchical AR(1) model on weekly network transit data from the Chicago Transit Authority (CTA)'s "L" subway system. In Section II, motivation for the project is explained (in particular, the thinking behind the choice of this model versus other time series models such as a VAR), the placement of the model in the Bayesian setting, and the details of implementation of inference in the probabilistic programming language Stan. Section III briefly explains the data processing choices. Section IV (a) reports results in a simulated data setting with known "true" parameters that govern the data generating process to verify the accuracy of model implementation, and Section IV (b) reports results of the model applied to the CTA "L" data. Section V concludes the report by discussing limitations and possible extensions of this project.
+
+## II. Methods
+
+### a. Preliminaries and Motivation
+First, let us define our setting. We have an $\text{AR}(1)$ process,
+$$y_{t, i} = c_i+\beta_iy_{t-1,i}+u_{t, i},$$
+where $y_{t,i}$ and $y_{t-1,i}$ ($t\in \{2, \ldots ,T\}$ where $T$ is the length of the series) are usage at transit node $i$ in periods $t$ and $t-1$ respectively, $c_i$ is the constant term for node $i$, $\beta_i$ is the coefficient term on the first lag $y_{t-1,i}$, and $u_{t, i}$ is the innovation, or error term. This process is assumed to be stationary and for all $K$ stations across the network. Although models such as this are often used to forecast the modeled series into the future (in this case, what is expected usage at a given node $i$ at period $t$ given period $t-1$?), this project takes a different approach. Our goal is to categorize how different nodes in a transit network respond dynamically to shocks over time. 
+
+Since all $K$ series are assumed (or forced) to be stationary, this implies $|\beta_i| < 1$. We can then categorize the series's behavior based on the value of $\beta_i$. If $\beta_i > 0$, the value of the series at time $t$ is positively correlated with the value at time $t-1$ and so shocks to usage are more persistent over time. If $\beta_i < 0$, this correlation is negative and the series's behavior exhibits reversion to its mean. Another way to categorize the series is analysis of the innovation, $u_{t,i}$. That is, how does the series vary from period to period in a way that is not captured by $\alpha_i$ or $\beta_i$. Thus, we can categorize nodes in the network based on these two criteria and this naturally gives a $2\times 2$ matrix of categories where one component controls persistence of shocks and the other controls variability.
+
+A $\text{VAR}$ model was also considered as a possible candidate for modeling, which would allow for explicit estimation of lagged effects between nodes. The hierarchical $\text{AR}(1)$ was ultimately chosen primarily because of the data setting. The data set for this project (which will be explained in-detail in Section III.) is weekly ridership data by CTA "L" station from January 2021 to December 2024. At the weekly summarization level for ridership, it is unlikely that that a shock at time $t-1$ at station $i$ has predictive power in explaining ridership at time $t$ at station $j$. This might not necessarily be true at a half-hour summarization level where transit time tables dictate how a rush hour shock at time $t-1$ at one station propagates through the network at time $t$. Thus, we deem the $\text{AR}(1)$ model sufficient for categorizing the week-to-week ridership dynamics of stations across the network.
+
+### b. Model
+We now explain the full specification of the hierarchical $\text{AR}(1)$ process (all concrete hyper priors are from the variant of the model used on the CTA "L" data set). For node $k \in \{1, \ldots, K\}$ at time $t \in \{2, \ldots, T\}$, we model usage $Y_{t,k}$ as
+$$Y_{t,k} \mid Y_{t-1,k}, c_k, \beta_k, \boldsymbol{\eta}, \sigma_k \sim \mathcal{N}\left(c_k + \beta_k Y_{t-1,k} + \mathbf{x}_t^\top \boldsymbol{\eta}, \, \sigma_k^2\right),$$
+
+where $c_k$ is a node-specific intercept, $\beta_k$ is a node-specific $\text{AR}$ coefficient, $\mathbf{x}_t \in \mathbb{R}^P$ is a vector of seasonal indicators (monthly, with January as a baseline), $\boldsymbol{\eta} \in \mathbb{R}^P$ are population-level shared seasonal effects, and $\sigma_k$ is a node-specific innovation term. Node-level intercepts $c_k$ are modeled in a straight-forward hierarchical manner, where each $c_k$ is the sum of a population-level mean intercept $\gamma$ and some node-specific deviation $\tilde{c}_k$,
+$$c_k = \gamma + \sigma_c \, \tilde{c}_k, \qquad \tilde{c}_k \sim \mathcal{N}(0, 1).$$
+Similarly, node-specific $\text{AR}$ coefficients are modeled hierarchically as a population mean $\delta$ plus some deviation $\tilde{\phi}_k$,
+$$\beta_k = \delta + \sigma_\phi \, \tilde{\phi}_k.$$
+but following Morris 2019 this deviation is spacially smoothed by enforcing an intrinsic conditional autoregressive (ICAR) prior on $\tilde{\boldsymbol{\phi}}$ from the transit network graph structure, with the log density
+$$-\frac{1}{2} \left(\sum_{i\sim j} (\tilde{\phi}_i - \tilde{\phi}_j)^2\right) + \text{const}.$$
+where $i\sim j$ if nodes $i, j$ are connected in the network. Since $\tilde{\boldsymbol{\phi}}$ is unidentifiable, we enforce a soft sum-to-zero constraint on $\tilde{\boldsymbol{\phi}}$
+$$\sum_{k=1}^K \tilde{\phi}_k \sim \mathcal{N}(0, 0.001 K).$$
+Station-level innovation terms $\sigma_k$ are given independent half-normal priors:
+$$\sigma_k \sim \mathcal{N}^+(0, 1).$$
+The population-level and variance hyperpriors are weakly-informative, but are constructed so as to ensure the prior predictive distribution can reasonably be expected to be stationary:
+$$
+\begin{aligned}
+\gamma &\sim \mathcal{N}(0, 1), \\
+\delta &\sim \mathcal{N}(0.3, 0.3), \\
+\sigma_c &\sim \mathcal{N}_+(0, 1), \\
+\sigma_\phi &\sim \mathcal{N}_+(0, 0.3), \\
+\boldsymbol{\eta} &\sim \mathcal{N}(\mathbf{0}, 0.5\cdot \mathbf{I}_P).
+\end{aligned}
+$$
+This model helps achieve this project's goal of categorizing stations by their ridership dynamics by allowing partial pooling for $\c_i$ and $\beta_i$ across stations. That is, those sets of node-level parameters are shrunk towards the population-level means $\gamma$ and $\delta$ respectively. Additionally, the ICAR prior on $\tilde{\phi_i}$ leverages the network structure of the model to allow $\beta_i$ coefficients to be smoothed to its adjacent neighbors' coefficients.
+
+### (c) Implementation in Stan
+
+This model is implemented in Stan with the Hamiltonian Monte Carlo sampler set to default settings and the ICAR prior on the $\text{AR}$ coefficient spatial deviations implemented like so,
+```{.stan}
+target += -0.5 * dot_self(phi_zero[node1] - phi_zero[node2]);
+sum(phi_zero) ~ normal(0, 0.001 * K);
+```
+exactly as in Morris 2019. The likelihood is implemented like so:
+```{.stan}
+for (k in 1:K) {
+  Y[2:T, k] ~ normal(c[k] + beta[k] * Y[1:(T-1), k] 
+                          + X[2:T] * seas, sigma[k]);
+}
+```
+Implementation was verified by recovering known parameters from simulated data on a small synthetic graph before applying the model to the CTA ridership data.
+
+## III. Data
+Now, we briefly discuss data processing. CTA "L" daily ridership figures by station are downloaded from the CTA's data portal. The data is then filtered to Jan 2021-December 2024 (primarily to avoid modeling the COVID-19 shock to ridership) and then summarized on a weekly basis (for a total $T = 208$ weeks in the data). The log first-difference is taken of the resulting series to enforce stationarity. Visual inspection of the resulting series confirm this. The adjacency matrix used to enforce the ICAR prior is derived from the CTA's General Transit Feed Specification (GTFS) data. 
+
+8 stations needed to be dropped from the data due two categories of issues. First, 3 stations (Berwyn, Lawrence, and Damen-Lake) had large missingness in the ridership data due to renovations in the modeled time period, and so were dropped. The adjacency matrix was modified to accommodate this by generating edges between those stations neighbors. Second, since the GTFS data is forward looking (that is, it describes the network structure of the "L" in 2026 and beyond), 5 stations (Randolph-Wabash, State-Lake, Ashland-63rd, Madison-Wabash, and Halsted-63rd) are present in the ridership data that are not present in the adjacency matrix due to anticipated closures. These stations are removed from the data with no changes needed to the adjacency matrix. Across 12 combined weeks, 2 stations (Racine and UIC-Halsted) had 0 ridership due to limited-time construction so those cells are imputed with 0.5 before the log first-difference is taken. After this data processing, the ridership matrix $Y$ has dimensions $208 \text{ weeks}\times 138 \text{ stations}$.
+
+## IV. Results
+
+```{r, echo=FALSE}
+ggplot(ppc, aes(x = week)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = "90% PPC interval"), alpha = 0.3) +
+  geom_line(aes(y = median, color = "Posterior median"), linewidth = 0.5) +
+  geom_line(aes(y = observed, color = "Observed"), linewidth = 0.4) +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "gray50", alpha = 0.5) +
+  facet_wrap(~ station, scales = "free_y", ncol = 2) +
+  scale_color_manual(values = c("Posterior median" = "steelblue", "Observed" = "black"), name = NULL) +
+  scale_fill_manual(values = c("90% PPC interval" = "steelblue"), name = NULL) +
+  labs(x = "Week", y = expression(Delta * " log " * y)) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+## V. Conclusion

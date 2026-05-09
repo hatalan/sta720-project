@@ -351,6 +351,9 @@ cta_adjacency <- as.data.frame(W) |>
 dir.create("../data/clean", showWarnings = FALSE, recursive = TRUE)
 write_csv(cta_wide,          "../data/clean/cta-data-wide.csv")
 write_csv(cta_adjacency,     "../data/clean/cta-adjacency.csv")
-write_csv(station_lookup,    "../data/clean/station-lookup.csv")
+write_csv(
+  station_lookup |> filter(station_id %in% as.integer(kept_ids)) |> distinct(station_id, .keep_all = TRUE),
+  "../data/clean/station-lookup.csv"
+)
 write_csv(station_line_map,  "../data/clean/station-lines.csv")
 ```

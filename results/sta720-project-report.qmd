@@ -172,29 +172,31 @@ fmt_ci <- function(x, digits = 3) {
 
 # Look up station index by name (partial match) or ID
 station_idx <- function(query) {
+  adj_ids <- as.integer(colnames(adj)[-1])
   if (is.numeric(query)) {
-    idx <- which(as.integer(colnames(adj)[-1]) == query)
+    idx <- which(adj_ids == query)
   } else {
-    idx <- which(str_detect(stations$stationname, regex(query, ignore_case = TRUE)))
+    matched_ids <- stations$station_id[str_detect(stations$stationname, regex(query, ignore_case = TRUE))]
+    idx <- which(adj_ids %in% matched_ids)
   }
   tibble(
     idx = idx,
-    station_id = as.integer(colnames(adj)[-1])[idx],
-    stationname = stations$stationname[idx]
+    station_id = adj_ids[idx],
+    stationname = stations$stationname[match(adj_ids[idx], stations$station_id)]
   )
 }
 
 station_idx(40210)
 
-post_summary(posterior$beta.38)
-post_summary(posterior$beta.123)
-post_summary(posterior$beta.19)
-post_summary(posterior$beta.35)
+post_summary(posterior$beta.33)
+post_summary(posterior$beta.115)
+post_summary(posterior$beta.18)
+post_summary(posterior$beta.30)
 
-post_summary(posterior$sigma.38)
-post_summary(posterior$sigma.123)
-post_summary(posterior$sigma.19)
-post_summary(posterior$sigma.35)
+post_summary(posterior$sigma.33)
+post_summary(posterior$sigma.115)
+post_summary(posterior$sigma.18)
+post_summary(posterior$sigma.30)
 
 post_summary(posterior$gamma)
 post_summary(posterior$delta)

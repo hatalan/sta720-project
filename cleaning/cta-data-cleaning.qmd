@@ -316,6 +316,32 @@ cta_wide |>
   labs(x = NULL, y = "Log first difference", title = "Sample station series")
 ```
 
+## Build station-to-line color mapping
+
+```{r station-lines}
+station_coords <- stops |>
+  filter(location_type == 1) |>
+  select(stop_id, stop_lat, stop_lon) |>
+  mutate(stop_id = as.double(stop_id))
+
+station_line_map <- rail_stations |>
+  distinct(parent_station, route_id) |>
+  left_join(routes |> select(route_id, route_color), by = "route_id") |>
+  filter(parent_station %in% kept_ids) |>
+  group_by(parent_station) |>
+  summarise(
+    n_lines = n(),
+    line = if (n() == 1) first(route_id) else "Multi",
+    color = if (n() == 1) first(route_color) else "000000",
+    .groups = "drop"
+  ) |>
+  left_join(station_coords, by = c("parent_station" = "stop_id")) |>
+  rename(station_id = parent_station) |>
+  mutate(station_id = as.integer(station_id))
+
+station_line_map
+```
+
 ## Write cleaned data
 
 ```{r write}
@@ -323,7 +349,8 @@ cta_adjacency <- as.data.frame(W) |>
   rownames_to_column("station_id")
 
 dir.create("../data/clean", showWarnings = FALSE, recursive = TRUE)
-write_csv(cta_wide,       "../data/clean/cta-data-wide.csv")
-write_csv(cta_adjacency,  "../data/clean/cta-adjacency.csv")
-write_csv(station_lookup, "../data/clean/station-lookup.csv")
+write_csv(cta_wide,          "../data/clean/cta-data-wide.csv")
+write_csv(cta_adjacency,     "../data/clean/cta-adjacency.csv")
+write_csv(station_lookup,    "../data/clean/station-lookup.csv")
+write_csv(station_line_map,  "../data/clean/station-lines.csv")
 ```

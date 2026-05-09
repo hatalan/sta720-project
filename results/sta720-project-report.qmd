@@ -3,7 +3,7 @@ title: "STA 720: Bayesian Analysis - Final Project Report"
 author: "Nicholas Hatala"
 execute:
   warning: false
-  message: false  # Recommended to also hide package loading messages
+  message: false
 format:
   pdf:
     colorlinks: true
@@ -19,6 +19,7 @@ editor: visual
 
 library(tidyverse)
 library(ggplot2)
+library(igraph)
 
 posterior <- read_csv(
   "../notebooks/ar/ar_mod_cta_icar_seas_output/ar_1_hier_icar_seas-20260508103954_1.csv",
@@ -28,6 +29,10 @@ posterior <- read_csv(
 ppc <- read_csv(
   "../notebooks/ar/ar_mod_cta_icar_seas_output/ppc_summary.csv"
 )
+
+adj <- read_csv("../data/clean/cta-adjacency.csv")
+stations <- read_csv("../data/clean/station-lookup.csv")
+station_line_map <- read_csv("../data/clean/station-lines.csv")
 ```
 
 ## I. Introduction
@@ -87,11 +92,115 @@ for (k in 1:K) {
 Implementation was verified by recovering known parameters from simulated data on a small synthetic graph before applying the model to the CTA ridership data.
 
 ## III. Data
+
 Now, we briefly discuss data processing. CTA "L" daily ridership figures by station are downloaded from the CTA's data portal. The data is then filtered to Jan 2021-December 2024 (primarily to avoid modeling the COVID-19 shock to ridership) and then summarized on a weekly basis (for a total $T = 208$ weeks in the data). The log first-difference is taken of the resulting series to enforce stationarity. Visual inspection of the resulting series confirm this. The adjacency matrix used to enforce the ICAR prior is derived from the CTA's General Transit Feed Specification (GTFS) data. 
 
+```{r, echo=FALSE, fig.width=5, fig.height=5, fig.cap="CTA 'L' network graph derived from GTFS route data. Nodes are colored by line; multi-line stations are shown in black."}
+adj_mat <- as.matrix(adj[, -1])
+rownames(adj_mat) <- colnames(adj_mat)
+
+g <- graph_from_adjacency_matrix(adj_mat, mode = "undirected", diag = FALSE)
+
+color_map <- setNames(
+  paste0("#", station_line_map$color),
+  as.character(station_line_map$station_id)
+)
+V(g)$color <- color_map[V(g)$name]
+
+coord_map <- station_line_map |>
+  arrange(as.integer(station_id))
+geo_layout <- cbind(coord_map$stop_lon, coord_map$stop_lat)
+
+par(mar = c(0, 0, 0, 0))
+plot(g,
+     layout = geo_layout[match(V(g)$name, as.character(coord_map$station_id)), ],
+     vertex.size = 4,
+     vertex.color = V(g)$color,
+     vertex.frame.color = NA,
+     vertex.label = NA,
+     edge.color = adjustcolor("gray40", alpha.f = 0.5),
+     edge.width = 0.8)
+
+# Legend
+line_colors <- station_line_map |>
+  distinct(line, color) |>
+  arrange(line) |>
+  mutate(line = c("Blue", "Brown", "Green", "Multiple Lines",
+                  "Orange", "Purple", "Pink", "Red",
+                  "Yellow"))
+
+legend("bottomleft",
+       legend = line_colors$line,
+       col = paste0("#", line_colors$color),
+       pch = 16, pt.cex = 1.5, cex = 0.7,
+       bty = "n", title = "Line")
+```
 8 stations needed to be dropped from the data due two categories of issues. First, 3 stations (Berwyn, Lawrence, and Damen-Lake) had large missingness in the ridership data due to renovations in the modeled time period, and so were dropped. The adjacency matrix was modified to accommodate this by generating edges between those stations neighbors. Second, since the GTFS data is forward looking (that is, it describes the network structure of the "L" in 2026 and beyond), 5 stations (Randolph-Wabash, State-Lake, Ashland-63rd, Madison-Wabash, and Halsted-63rd) are present in the ridership data that are not present in the adjacency matrix due to anticipated closures. These stations are removed from the data with no changes needed to the adjacency matrix. Across 12 combined weeks, 2 stations (Racine and UIC-Halsted) had 0 ridership due to limited-time construction so those cells are imputed with 0.5 before the log first-difference is taken. After this data processing, the ridership matrix $Y$ has dimensions $208 \text{ weeks}\times 138 \text{ stations}$.
 
 ## IV. Results
+
+```{r, echo=FALSE}
+# Summarise a posterior vector to median [95% CI]
+post_summary <- function(x) {
+  tibble(
+    median = median(x),
+    lower  = quantile(x, 0.025),
+    upper  = quantile(x, 0.975)
+  )
+}
+
+# Summarise all columns matching a pattern, one row per column
+post_summary_cols <- function(df, pattern) {
+  df |>
+    select(matches(pattern)) |>
+    pivot_longer(everything(), names_to = "param", values_to = "value") |>
+    group_by(param) |>
+    summarise(
+      median = median(value),
+      lower  = quantile(value, 0.025),
+      upper  = quantile(value, 0.975),
+      .groups = "drop"
+    )
+}
+
+# Format as "median [lower, upper]" for inline use
+fmt_ci <- function(x, digits = 3) {
+  s <- post_summary(x)
+  sprintf("%.*f [%.*f, %.*f]",
+          digits, s$median, digits, s$lower, digits, s$upper)
+}
+
+# Look up station index by name (partial match) or ID
+station_idx <- function(query) {
+  if (is.numeric(query)) {
+    idx <- which(as.integer(colnames(adj)[-1]) == query)
+  } else {
+    idx <- which(str_detect(stations$stationname, regex(query, ignore_case = TRUE)))
+  }
+  tibble(
+    idx = idx,
+    station_id = as.integer(colnames(adj)[-1])[idx],
+    stationname = stations$stationname[idx]
+  )
+}
+
+station_idx(40210)
+
+post_summary(posterior$beta.38)
+post_summary(posterior$beta.123)
+post_summary(posterior$beta.19)
+post_summary(posterior$beta.35)
+
+post_summary(posterior$sigma.38)
+post_summary(posterior$sigma.123)
+post_summary(posterior$sigma.19)
+post_summary(posterior$sigma.35)
+
+post_summary(posterior$gamma)
+post_summary(posterior$delta)
+```
+
+First, we analyze the results of inference by conducting a posterior predictive check across 4 stations that are believed to be representative of behavior across the transit network (Clark/Lake, Loyola, Sox-35th-Dan Ryan, and UIC-Halsted). From Figure 2, the model appears to be accurately modeling the station $\text{AR}(1)$ processes. For example, Sox-35th-Dan Ryan, the station that services the White Sox's Rate Field, has 
 
 ```{r, echo=FALSE}
 ggplot(ppc, aes(x = week)) +
@@ -102,9 +211,88 @@ ggplot(ppc, aes(x = week)) +
   facet_wrap(~ station, scales = "free_y", ncol = 2) +
   scale_color_manual(values = c("Posterior median" = "steelblue", "Observed" = "black"), name = NULL) +
   scale_fill_manual(values = c("90% PPC interval" = "steelblue"), name = NULL) +
-  labs(x = "Week", y = expression(Delta * " log " * y)) +
+  labs(x = "Week", y = expression(Delta * " log " * "Ridership")) +
   theme_minimal() +
   theme(legend.position = "top")
+```
+
+Now, we report the population-level means for the constant and $\text{AR}$ terms in Table 1.
+
+```{r, echo=FALSE}
+bind_rows(
+  post_summary(posterior$gamma) |> mutate(Parameter = "$\\gamma$ (population intercept)", .before = 1),
+  post_summary(posterior$delta) |> mutate(Parameter = "$\\delta$ (population AR coefficient)", .before = 1)
+) |>
+  rename(Median = median, `2.5%` = lower, `97.5%` = upper) |>
+  knitr::kable(digits = 3)
+```
+
+We can see that $\gamma$ is positive and quite close to 0, so across the transit network, there doesn't appear to be consistent growth in log-difference (that is, weekly positive or negative percentage growth rates in ridership), which is as expected. However, $\delta$ is quite negative with a posterior median of $-0.340 [-0.351, -0.328]$. This means that across the network, a increase or decrease at the previous period (from a unique event like a sports game or a convention) are likely to revert to the mean of the series (near 0). This follows, as it is unlikely that there would be consistent positive or negative percentage changes in ridership across the modeled time period.
+
+Now, we visualize the distribution of the station-level estimated $\hat{\beta_k}$ coefficients and $\hat{\sigma_k}$ innovations. These are plotted in a histogram in Figure 2.
+
+```{r, echo=FALSE}
+station_ids <- as.integer(colnames(adj)[-1])
+
+station_params <- tibble(
+  station_idx = seq_len(138),
+  station_id = station_ids,
+  beta = posterior |>
+    select(starts_with("beta.")) |>
+    summarise(across(everything(), median)) |>
+    pivot_longer(everything()) |> pull(value),
+  sigma = posterior |>
+    select(matches("^sigma\\.\\d+$")) |>
+    summarise(across(everything(), median)) |>
+    pivot_longer(everything()) |> pull(value)
+) |>
+  left_join(stations, by = "station_id")
+```
+
+```{r, echo=FALSE, fig.width=7, fig.height=4, fig.cap="Posterior median distributions of station-level parameters. Left: AR(1) coefficients. Right: innovation standard deviations."}
+p1 <- ggplot(station_params, aes(x = beta)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "white", linewidth = 0.2) +
+  labs(x = expression(hat(beta)[k]), y = "Count") +
+  theme_minimal()
+
+p2 <- ggplot(station_params, aes(x = sigma)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "white", linewidth = 0.2) +
+  labs(x = expression(hat(sigma)[k]), y = "Count") +
+  theme_minimal()
+
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+In large part, the posterior distribution of 
+
+```{r, echo=FALSE, fig.width=5, fig.height=4, fig.cap="Station-level posterior median AR(1) coefficient vs. innovation standard deviation."}
+ggplot(station_params, aes(x = beta, y = sigma)) +
+  geom_point(color = "steelblue", alpha = 0.7) +
+  labs(x = expression(hat(beta)[k]), y = expression(hat(sigma)[k])) +
+  theme_minimal()
+```
+
+```{r, echo=FALSE}
+# Hierarchical clustering on (beta, sigma)
+clust_mat <- station_params |> select(beta, sigma) |> scale()
+rownames(clust_mat) <- station_params$stationname
+hc <- hclust(dist(clust_mat), method = "ward.D2")
+
+# --- Set number of clusters here ---
+n_clusters <- 6
+
+station_params <- station_params |>
+  mutate(cluster = factor(cutree(hc, k = n_clusters)))
+```
+
+```{r, echo=FALSE, fig.width=5, fig.height=4, fig.cap="Station-level posterior medians colored by cluster assignment."}
+ggplot(station_params, aes(x = beta, y = sigma, color = cluster)) +
+  geom_point(alpha = 0.7, size = 2) +
+  labs(x = expression(hat(beta)[k]), y = expression(hat(sigma)[k]),
+       color = "Cluster") +
+  theme_minimal()
+
+write_csv(station_params, "../data/clean/cta-cluster.csv")
 ```
 
 ## V. Conclusion

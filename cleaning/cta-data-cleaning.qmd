@@ -1,5 +1,5 @@
 ---
-title: "CTA Ridership — Data Cleaning"
+title: "Data Cleaning"
 format:
   html:
     toc: true
@@ -9,6 +9,8 @@ execute:
   message: false
 ---
 
+## Load data
+
 ```{r setup}
 library(tidyverse)
 library(lubridate)
@@ -16,7 +18,7 @@ library(tseries)
 library(igraph)
 ```
 
-## Load ridership data
+## Load CTA data
 
 ```{r load-ridership}
 cta <- read_csv(
@@ -32,18 +34,16 @@ cta <- read_csv(
   mutate(date = mdy(date))
 ```
 
-## Load GTFS and build adjacency matrix
-
-Source: <https://www.transitchicago.com/developers/gtfs/>
-
-```{r load-gtfs}
+```{r}
 routes     <- read_csv("../data/raw/cta/routes.txt")
 trips      <- read_csv("../data/raw/cta/trips.txt")
 stop_times <- read_csv("../data/raw/cta/stop_times.txt")
 stops      <- read_csv("../data/raw/cta/stops.txt")
 ```
 
-```{r build-adjacency}
+# Build adjacency matrix
+
+```{r}
 rail_routes <- routes |>
   filter(route_type == 1) |>
   select(route_id, route_long_name)
@@ -101,17 +101,17 @@ cat("Adjacency matrix:", K, "x", K, "\n")
 cat("Edges:", nrow(edges), "\n")
 ```
 
-## Collapse duplicate station-days
+## Dedup stations
 
-```{r dedup}
+```{r}
 cta_dedup <- cta |>
   group_by(station_id, stationname, date, daytype) |>
   summarise(rides = mean(rides), .groups = "drop")
 ```
 
-## Reshape to weekly wide format
+## Change to weekly wide format
 
-```{r wide}
+```{r}
 station_lookup <- cta_dedup |>
   distinct(station_id, stationname) |>
   arrange(station_id)
@@ -146,9 +146,9 @@ cta_wide <- cta_dedup |>
   select(-mon)
 ```
 
-## Stations with high missingness
+## Flag stations with high missingness
 
-```{r high-missing}
+```{r}
 cta_wide |>
   summarise(across(starts_with("s_"), ~ sum(is.na(.)))) |>
   pivot_longer(everything(), names_to = "station", values_to = "n_missing") |>
@@ -159,11 +159,9 @@ cta_wide |>
   arrange(desc(n_missing))
 ```
 
-## Drop closed stations and bridge neighbors
+## Drop closed stations and bridge neighbors in adjacency matrix
 
-Berwyn, Lawrence, and Damen-Lake are dropped due to extended closures (RPM renovation). Their neighbors are connected to maintain graph connectivity.
-
-```{r drop-bridge}
+```{r}
 drop_names <- c("Berwyn", "Lawrence", "Damen-Lake")
 drop_ids <- station_lookup |>
   filter(str_detect(stationname, paste(drop_names, collapse = "|"))) |>
@@ -174,7 +172,6 @@ cat("Dropping stations:\n")
 station_lookup |>
   filter(station_id %in% as.integer(drop_ids))
 
-# Bridge neighbors before removing
 for (sid in drop_ids) {
   neighbors <- which(W[sid, ] == 1L)
   if (length(neighbors) >= 2) {
@@ -190,11 +187,9 @@ for (sid in drop_ids) {
   }
 }
 
-# Remove dropped stations from adjacency matrix
 keep_nodes <- setdiff(rownames(W), drop_ids)
 W <- W[keep_nodes, keep_nodes]
 
-# Remove from ridership data
 cta_wide <- cta_wide |>
   select(-any_of(paste0("s_", drop_ids)))
 
@@ -203,7 +198,7 @@ cat("\nAdjacency matrix after dropping:", nrow(W), "x", ncol(W), "\n")
 
 ## Filter to intersection of ridership and adjacency stations
 
-```{r filter-intersect}
+```{r}
 adj_stations <- paste0("s_", rownames(W))
 all_stations <- names(cta_wide) |> str_subset("^s_")
 
@@ -281,7 +276,7 @@ issues <- full_join(
 if (nrow(issues) > 0) issues
 ```
 
-## Impute zeros
+## Impute 0.5 for zeros
 
 ```{r impute-zeros}
 cta_wide <- cta_wide |>
@@ -296,9 +291,7 @@ cta_wide <- cta_wide |>
   slice(-1)
 ```
 
-## Stationarity assessment
-
-### Time series plots
+## Time series plots
 
 ```{r ts-plots}
 #| fig-width: 9

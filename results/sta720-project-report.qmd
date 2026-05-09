@@ -1,5 +1,6 @@
 ---
-title: "STA 720: Bayesian Analysis - Final Project Report"
+title: "Analysis of CTA 'L' Subway Station Dynamics with a Hierarchical AR(1) Model"
+subtitle: "STA 720: Bayesian Analysis"
 author: "Nicholas Hatala"
 execute:
   warning: false
@@ -17,26 +18,37 @@ editor: visual
 #| message: false
 #| warning: false
 
+# Load libraries
 library(tidyverse)
 library(ggplot2)
 library(igraph)
 
+# Load posterior
 posterior <- read_csv(
   "../notebooks/ar/ar_mod_cta_icar_seas_output/ar_1_hier_icar_seas-20260508103954_1.csv",
   comment = "#"
 )
 
+# Load simulation posterior
+sim_posterior <- read_csv(
+  "../notebooks/ar/ar_mod_icar_post_output/ar_1_hierarchical_icar-20260508221819_1.csv",
+  comment = "#")
+
+# Load posterior predictive checks
 ppc <- read_csv(
-  "../notebooks/ar/ar_mod_cta_icar_seas_output/ppc_summary.csv"
+  "../data/clean/ppc_summary.csv"
 )
 
+# Load adjacency matrix
 adj <- read_csv("../data/clean/cta-adjacency.csv")
+
+# Load station look-up df
 stations <- read_csv("../data/clean/station-lookup.csv")
-station_line_map <- read_csv("../data/clean/station-lines.csv")
+
 ```
 
 ## I. Introduction
-This applied project aims to implement a Bayesian hierarchical AR(1) model on weekly network transit data from the Chicago Transit Authority (CTA)'s "L" subway system. In Section II, motivation for the project is explained (in particular, the thinking behind the choice of this model versus other time series models such as a VAR), the placement of the model in the Bayesian setting, and the details of implementation of inference in the probabilistic programming language Stan. Section III briefly explains the data processing choices. Section IV (a) reports results in a simulated data setting with known "true" parameters that govern the data generating process to verify the accuracy of model implementation, and Section IV (b) reports results of the model applied to the CTA "L" data. Section V concludes the report by discussing limitations and possible extensions of this project.
+This applied project implements a Bayesian hierarchical AR(1) model on weekly network transit data from the Chicago Transit Authority (CTA)'s "L" subway system. In Section II, motivation for the project is explained (in particular, the thinking behind the choice of this model versus other time series models such as a VAR), the placement of the model in the Bayesian setting, and the details of implementation of inference in the probabilistic programming language Stan. Section III briefly explains data processing choices. Section IV (a) reports results in a simulated data setting with known "true" parameters that govern the data generating process to verify the accuracy of model implementation, and Section IV (b) reports results of the model applied to the CTA "L" data. Section V concludes the report by discussing limitations and possible extensions of this project.
 
 ## II. Methods
 
@@ -45,7 +57,7 @@ First, let us define our setting. We have an $\text{AR}(1)$ process,
 $$y_{t, i} = c_i+\beta_iy_{t-1,i}+u_{t, i},$$
 where $y_{t,i}$ and $y_{t-1,i}$ ($t\in \{2, \ldots ,T\}$ where $T$ is the length of the series) are usage at transit node $i$ in periods $t$ and $t-1$ respectively, $c_i$ is the constant term for node $i$, $\beta_i$ is the coefficient term on the first lag $y_{t-1,i}$, and $u_{t, i}$ is the innovation, or error term. This process is assumed to be stationary and for all $K$ stations across the network. Although models such as this are often used to forecast the modeled series into the future (in this case, what is expected usage at a given node $i$ at period $t$ given period $t-1$?), this project takes a different approach. Our goal is to categorize how different nodes in a transit network respond dynamically to shocks over time. 
 
-Since all $K$ series are assumed (or forced) to be stationary, this implies $|\beta_i| < 1$. We can then categorize the series's behavior based on the value of $\beta_i$. If $\beta_i > 0$, the value of the series at time $t$ is positively correlated with the value at time $t-1$ and so shocks to usage are more persistent over time. If $\beta_i < 0$, this correlation is negative and the series's behavior exhibits reversion to its mean. Another way to categorize the series is analysis of the innovation, $u_{t,i}$. That is, how does the series vary from period to period in a way that is not captured by $\alpha_i$ or $\beta_i$. Thus, we can categorize nodes in the network based on these two criteria and this naturally gives a $2\times 2$ matrix of categories where one component controls persistence of shocks and the other controls variability.
+Since all $K$ series are assumed (or forced) to be stationary, we expect $|\beta_i| < 1$. We can then categorize the series's behavior based on the value of $\beta_i$. If $\beta_i > 0$, the value of the series at time $t$ is positively correlated with the value at time $t-1$ and so shocks to usage are more persistent over time. If $\beta_i < 0$, this correlation is negative and the series's behavior exhibits reversion to its mean. Another way to categorize the series is analysis of the innovation, $u_{t,i}$. That is, how does the series vary from period to period in a way that is not captured by $\alpha_i$ or $\beta_i$. Thus, we can categorize nodes in the network based on these two criteria and this naturally gives a $2\times 2$ matrix of categories where one component controls persistence of shocks and the other controls variability.
 
 A $\text{VAR}$ model was also considered as a possible candidate for modeling, which would allow for explicit estimation of lagged effects between nodes. The hierarchical $\text{AR}(1)$ was ultimately chosen primarily because of the data setting. The data set for this project (which will be explained in-detail in Section III.) is weekly ridership data by CTA "L" station from January 2021 to December 2024. At the weekly summarization level for ridership, it is unlikely that that a shock at time $t-1$ at station $i$ has predictive power in explaining ridership at time $t$ at station $j$. This might not necessarily be true at a half-hour summarization level where transit time tables dictate how a rush hour shock at time $t-1$ at one station propagates through the network at time $t$. Thus, we deem the $\text{AR}(1)$ model sufficient for categorizing the week-to-week ridership dynamics of stations across the network.
 
@@ -57,12 +69,12 @@ where $c_k$ is a node-specific intercept, $\beta_k$ is a node-specific $\text{AR
 $$c_k = \gamma + \sigma_c \, \tilde{c}_k, \qquad \tilde{c}_k \sim \mathcal{N}(0, 1).$$
 Similarly, node-specific $\text{AR}$ coefficients are modeled hierarchically as a population mean $\delta$ plus some deviation $\tilde{\phi}_k$,
 $$\beta_k = \delta + \sigma_\phi \, \tilde{\phi}_k.$$
-but following Morris 2019 this deviation is spacially smoothed by enforcing an intrinsic conditional autoregressive (ICAR) prior on $\tilde{\boldsymbol{\phi}}$ from the transit network graph structure, with the log density
+but following Morris (2019)[^morris], this deviation is spatially smoothed by enforcing an intrinsic conditional AR (ICAR) prior on $\tilde{\boldsymbol{\phi}}$ from the transit network graph structure, with the log density
 $$-\frac{1}{2} \left(\sum_{i\sim j} (\tilde{\phi}_i - \tilde{\phi}_j)^2\right) + \text{const}.$$
 where $i\sim j$ if nodes $i, j$ are connected in the network. Since $\tilde{\boldsymbol{\phi}}$ is unidentifiable, we enforce a soft sum-to-zero constraint on $\tilde{\boldsymbol{\phi}}$
 $$\sum_{k=1}^K \tilde{\phi}_k \sim \mathcal{N}(0, 0.001 K).$$
 Station-level innovation terms $\sigma_k$ are given independent half-normal priors:
-$$\sigma_k \sim \mathcal{N}^+(0, 1).$$
+$$\sigma_k \sim \mathcal{N}_+(0, 1).$$
 The population-level and variance hyperpriors are weakly-informative, but are constructed so as to ensure the prior predictive distribution can reasonably be expected to be stationary:
 $$
 \begin{aligned}
@@ -73,74 +85,59 @@ $$
 \boldsymbol{\eta} &\sim \mathcal{N}(\mathbf{0}, 0.5\cdot \mathbf{I}_P).
 \end{aligned}
 $$
-This model helps achieve this project's goal of categorizing stations by their ridership dynamics by allowing partial pooling for $\c_i$ and $\beta_i$ across stations. That is, those sets of node-level parameters are shrunk towards the population-level means $\gamma$ and $\delta$ respectively. Additionally, the ICAR prior on $\tilde{\phi_i}$ leverages the network structure of the model to allow $\beta_i$ coefficients to be smoothed to its adjacent neighbors' coefficients.
+This model helps achieve this project's goal of categorizing stations by their ridership dynamics by allowing partial pooling for $c_i$ and $\beta_i$ across stations. That is, those sets of node-level parameters are shrunk towards the population-level means $\gamma$ and $\delta$ respectively. Additionally, the ICAR prior on $\tilde{\phi_i}$ leverages the network structure of the model to allow $\beta_i$ coefficients to be smoothed to adjacent neighbors' coefficients.
 
-### (c) Implementation in Stan
-
-This model is implemented in Stan with the Hamiltonian Monte Carlo sampler set to default settings and the ICAR prior on the $\text{AR}$ coefficient spatial deviations implemented like so,
+### (c) Implementation in Stan and Data Simulation
+This model is implemented in Stan with the sampler set to default settings and the ICAR prior on the $\text{AR}$ coefficient spatial deviations implemented like so,
 ```{.stan}
 target += -0.5 * dot_self(phi_zero[node1] - phi_zero[node2]);
 sum(phi_zero) ~ normal(0, 0.001 * K);
 ```
-exactly as in Morris 2019. The likelihood is implemented like so:
+exactly as in Morris (2019). The likelihood is implemented like so:
 ```{.stan}
 for (k in 1:K) {
   Y[2:T, k] ~ normal(c[k] + beta[k] * Y[1:(T-1), k] 
                           + X[2:T] * seas, sigma[k]);
 }
 ```
-Implementation was verified by recovering known parameters from simulated data on a small synthetic graph before applying the model to the CTA ridership data.
+Implementation was verified by recovering known parameters from simulated data on a small synthetic graph before applying the model to the CTA ridership data. Table 1 reports the true and posterior median $\beta_k$ from this simulation.
+```{r, echo=FALSE}
+# Function to pull betas from simulation posterior
+sim_beta_summary <- sim_posterior |>
+  select(starts_with("beta.")) |>
+  pivot_longer(everything(), names_to = "param", values_to = "value") |>
+  group_by(param) |>
+  summarise(
+    median = median(value),
+    lower = quantile(value, 0.025),
+    upper = quantile(value, 0.975),
+    .groups = "drop"
+  )
+
+# Simulation comparison table
+tibble(
+  Node = 1:5,
+  `True $\\beta_k$` = c(-0.45, -0.40, -0.30, -0.25, -0.18),
+  `Posterior Median` = sim_beta_summary$median,
+  `2.5%` = sim_beta_summary$lower,
+  `97.5%` = sim_beta_summary$upper
+) |>
+  knitr::kable(digits = 3, caption = "Parameter recovery for simulated $\\beta_k$")
+```
+The model recovers the true values of the simulated $\beta_k$ within the 95% credible intervals.
 
 ## III. Data
+Now, we briefly discuss data processing. CTA "L" daily ridership data by station was downloaded from the CTA's data portal. The data is then filtered to Jan 2021-December 2024 (primarily to avoid modeling the COVID-19 shock to ridership) and then summarized on a weekly basis (for a total $T = 208$ weeks in the data). The log first-difference is taken of the resulting series to enforce stationarity. Visual inspection of the resulting series confirm this. The adjacency matrix used to enforce the ICAR prior is derived from the CTA's General Transit Feed Specification (GTFS) data. 
 
-Now, we briefly discuss data processing. CTA "L" daily ridership figures by station are downloaded from the CTA's data portal. The data is then filtered to Jan 2021-December 2024 (primarily to avoid modeling the COVID-19 shock to ridership) and then summarized on a weekly basis (for a total $T = 208$ weeks in the data). The log first-difference is taken of the resulting series to enforce stationarity. Visual inspection of the resulting series confirm this. The adjacency matrix used to enforce the ICAR prior is derived from the CTA's General Transit Feed Specification (GTFS) data. 
-
-```{r, echo=FALSE, fig.width=5, fig.height=5, fig.cap="CTA 'L' network graph derived from GTFS route data. Nodes are colored by line; multi-line stations are shown in black."}
-adj_mat <- as.matrix(adj[, -1])
-rownames(adj_mat) <- colnames(adj_mat)
-
-g <- graph_from_adjacency_matrix(adj_mat, mode = "undirected", diag = FALSE)
-
-color_map <- setNames(
-  paste0("#", station_line_map$color),
-  as.character(station_line_map$station_id)
-)
-V(g)$color <- color_map[V(g)$name]
-
-coord_map <- station_line_map |>
-  arrange(as.integer(station_id))
-geo_layout <- cbind(coord_map$stop_lon, coord_map$stop_lat)
-
-par(mar = c(0, 0, 0, 0))
-plot(g,
-     layout = geo_layout[match(V(g)$name, as.character(coord_map$station_id)), ],
-     vertex.size = 4,
-     vertex.color = V(g)$color,
-     vertex.frame.color = NA,
-     vertex.label = NA,
-     edge.color = adjustcolor("gray40", alpha.f = 0.5),
-     edge.width = 0.8)
-
-# Legend
-line_colors <- station_line_map |>
-  distinct(line, color) |>
-  arrange(line) |>
-  mutate(line = c("Blue", "Brown", "Green", "Multiple Lines",
-                  "Orange", "Purple", "Pink", "Red",
-                  "Yellow"))
-
-legend("bottomleft",
-       legend = line_colors$line,
-       col = paste0("#", line_colors$color),
-       pch = 16, pt.cex = 1.5, cex = 0.7,
-       bty = "n", title = "Line")
-```
-8 stations needed to be dropped from the data due two categories of issues. First, 3 stations (Berwyn, Lawrence, and Damen-Lake) had large missingness in the ridership data due to renovations in the modeled time period, and so were dropped. The adjacency matrix was modified to accommodate this by generating edges between those stations neighbors. Second, since the GTFS data is forward looking (that is, it describes the network structure of the "L" in 2026 and beyond), 5 stations (Randolph-Wabash, State-Lake, Ashland-63rd, Madison-Wabash, and Halsted-63rd) are present in the ridership data that are not present in the adjacency matrix due to anticipated closures. These stations are removed from the data with no changes needed to the adjacency matrix. Across 12 combined weeks, 2 stations (Racine and UIC-Halsted) had 0 ridership due to limited-time construction so those cells are imputed with 0.5 before the log first-difference is taken. After this data processing, the ridership matrix $Y$ has dimensions $208 \text{ weeks}\times 138 \text{ stations}$.
+8 stations needed to be dropped from the data due to two categories of issues. First, 3 stations (Berwyn, Lawrence, and Damen-Lake) had large missingness in ridership data due to renovations in the modeled time period, and so were dropped. The adjacency matrix was modified to accommodate this by generating edges between those stations' neighbors. Second, since the GTFS data is forward looking (that is, it describes the network structure of the "L" in 2026 and beyond), 5 stations (Randolph-Wabash, State-Lake, Ashland-63rd, Madison-Wabash, and Halsted-63rd) are present in the ridership data that are not present in the adjacency matrix due to anticipated closures. These stations are removed from the data with no changes needed to the adjacency matrix. Across 12 combined weeks, 2 stations (Racine and UIC-Halsted) had 0 ridership due to limited-time construction so those cells are imputed with 0.5 before the log first-difference is taken. After this data processing, the ridership matrix $Y$ has dimensions $208 \text{ weeks}\times 138 \text{ stations}$.
 
 ## IV. Results
-
 ```{r, echo=FALSE}
-# Summarise a posterior vector to median [95% CI]
+#| message: false
+#| warning: false
+#| results: hide
+
+# Grab posterior median and 95% interval
 post_summary <- function(x) {
   tibble(
     median = median(x),
@@ -149,44 +146,21 @@ post_summary <- function(x) {
   )
 }
 
-# Summarise all columns matching a pattern, one row per column
-post_summary_cols <- function(df, pattern) {
-  df |>
-    select(matches(pattern)) |>
-    pivot_longer(everything(), names_to = "param", values_to = "value") |>
-    group_by(param) |>
-    summarise(
-      median = median(value),
-      lower  = quantile(value, 0.025),
-      upper  = quantile(value, 0.975),
-      .groups = "drop"
-    )
-}
-
-# Format as "median [lower, upper]" for inline use
-fmt_ci <- function(x, digits = 3) {
-  s <- post_summary(x)
-  sprintf("%.*f [%.*f, %.*f]",
-          digits, s$median, digits, s$lower, digits, s$upper)
-}
-
 # Look up station index by name (partial match) or ID
 station_idx <- function(query) {
-  adj_ids <- as.integer(colnames(adj)[-1])
+  adj_ids <- as.integer(colnames(adj)[-1]) # Call adjacency matrix index
   if (is.numeric(query)) {
-    idx <- which(adj_ids == query)
+    idx <- which(adj_ids == query) # Pull index for ID
   } else {
-    matched_ids <- stations$station_id[str_detect(stations$stationname, regex(query, ignore_case = TRUE))]
-    idx <- which(adj_ids %in% matched_ids)
+    matched_ids <- stations$station_id[str_detect(stations$stationname, regex(query, ignore_case = TRUE))] # Match station name to ID
+    idx <- which(adj_ids %in% matched_ids) # Pull index
   }
   tibble(
     idx = idx,
     station_id = adj_ids[idx],
     stationname = stations$stationname[match(adj_ids[idx], stations$station_id)]
-  )
+  ) # Output tble of index, station ID, and station name
 }
-
-station_idx(40210)
 
 post_summary(posterior$beta.33)
 post_summary(posterior$beta.115)
@@ -201,62 +175,70 @@ post_summary(posterior$sigma.30)
 post_summary(posterior$gamma)
 post_summary(posterior$delta)
 ```
+First, we analyze the results of inference by conducting a posterior predictive check across 4 stations that are believed to be representative of behavior across the transit network (Clark/Lake, LaSalle, Loyola, and Sox-35th-Dan Ryan). From Figure 1, the model appears to be accurately modeling the station $\text{AR}(1)$ processes. For example, Sox-35th-Dan Ryan has a larger PPC interval than the other modeled stations. This follows since this station services the White Sox's Rate Field, and so would lead to more week-to-week variability in ridership.
+```{r, echo=FALSE, fig.width=8, fig.height=5, fig.cap="Posterior predictive distributions of a sample of 4 representative stations"}
 
-First, we analyze the results of inference by conducting a posterior predictive check across 4 stations that are believed to be representative of behavior across the transit network (Clark/Lake, Loyola, Sox-35th-Dan Ryan, and UIC-Halsted). From Figure 2, the model appears to be accurately modeling the station $\text{AR}(1)$ processes. For example, Sox-35th-Dan Ryan, the station that services the White Sox's Rate Field, has 
-
-```{r, echo=FALSE}
+# Plot posterior predictive checks
 ggplot(ppc, aes(x = week)) +
-  geom_ribbon(aes(ymin = lower, ymax = upper, fill = "90% PPC interval"), alpha = 0.3) +
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = "95% PPC interval"), alpha = 0.3) +
   geom_line(aes(y = median, color = "Posterior median"), linewidth = 0.5) +
   geom_line(aes(y = observed, color = "Observed"), linewidth = 0.4) +
   geom_hline(yintercept = 0, linetype = "dotted", color = "gray50", alpha = 0.5) +
   facet_wrap(~ station, scales = "free_y", ncol = 2) +
   scale_color_manual(values = c("Posterior median" = "steelblue", "Observed" = "black"), name = NULL) +
-  scale_fill_manual(values = c("90% PPC interval" = "steelblue"), name = NULL) +
+  scale_fill_manual(values = c("95% PPC interval" = "steelblue"), name = NULL) +
   labs(x = "Week", y = expression(Delta * " log " * "Ridership")) +
   theme_minimal() +
   theme(legend.position = "top")
+
 ```
-
-Now, we report the population-level means for the constant and $\text{AR}$ terms in Table 1.
-
+Now, we report the population-level means for the constant and $\text{AR}$ terms in Table 2.
 ```{r, echo=FALSE}
+
+# Generate table for population intercept and AR coefficient
 bind_rows(
   post_summary(posterior$gamma) |> mutate(Parameter = "$\\gamma$ (population intercept)", .before = 1),
-  post_summary(posterior$delta) |> mutate(Parameter = "$\\delta$ (population AR coefficient)", .before = 1)
+  post_summary(posterior$delta) |> mutate(Parameter = "$\\delta$ (population AR coefficient)", .before = 1),
 ) |>
   rename(Median = median, `2.5%` = lower, `97.5%` = upper) |>
-  knitr::kable(digits = 3)
+  knitr::kable(
+    digits = 3,
+    caption = "Population Posterior Parameters"
+  )
 ```
 
-We can see that $\gamma$ is positive and quite close to 0, so across the transit network, there doesn't appear to be consistent growth in log-difference (that is, weekly positive or negative percentage growth rates in ridership), which is as expected. However, $\delta$ is quite negative with a posterior median of $-0.340 [-0.351, -0.328]$. This means that across the network, a increase or decrease at the previous period (from a unique event like a sports game or a convention) are likely to revert to the mean of the series (near 0). This follows, as it is unlikely that there would be consistent positive or negative percentage changes in ridership across the modeled time period.
+We can see that $\gamma$ is positive and quite close to 0, so across the transit network there is not consistent growth in log-difference (that is, consistent positive or negative percent growth in ridership). Further inspection of the monthly seasonality coefficients reveals negative coefficients especially towards the end of the year, so the positive estimate for $\gamma$ reflects a "bounce back" in ridership from a usual decrease in December (given that January is the baseline). Nonetheless, all seasonal coefficients are close to 0. However, $\delta$ is quite negative with a posterior median of $-0.340$ $[-0.351, -0.328]$. This indicates that across the network, an increase or decrease in the previous period (from a unique event such as a sporting event or convention) is likely to revert to the mean of the series (near 0). This follows, as it is unlikely that there would be consistent positive or negative percentage changes in ridership across the modeled time period.
 
-Now, we visualize the distribution of the station-level estimated $\hat{\beta_k}$ coefficients and $\hat{\sigma_k}$ innovations. These are plotted in a histogram in Figure 2.
+Now, we visualize the distribution of the station-level estimated $\hat{\beta_k}$ coefficients and $\hat{\sigma_k}$ innovations. These are plotted in two histograms in Figure 2.
 
 ```{r, echo=FALSE}
+# Generate vector of station IDs
 station_ids <- as.integer(colnames(adj)[-1])
 
+# Generate median posterior station parameters data frame
 station_params <- tibble(
-  station_idx = seq_len(138),
-  station_id = station_ids,
+  station_idx = seq_len(138), # station index
+  station_id = station_ids, # station ID
   beta = posterior |>
-    select(starts_with("beta.")) |>
-    summarise(across(everything(), median)) |>
+    select(starts_with("beta.")) |> # select beta columns
+    summarise(across(everything(), median)) |> # take medians
     pivot_longer(everything()) |> pull(value),
   sigma = posterior |>
-    select(matches("^sigma\\.\\d+$")) |>
-    summarise(across(everything(), median)) |>
+    select(matches("^sigma\\.\\d+$")) |> # select sigma columns
+    summarise(across(everything(), median)) |> # take medians
     pivot_longer(everything()) |> pull(value)
 ) |>
-  left_join(stations, by = "station_id")
+  left_join(stations, by = "station_id") # join station names
 ```
 
-```{r, echo=FALSE, fig.width=7, fig.height=4, fig.cap="Posterior median distributions of station-level parameters. Left: AR(1) coefficients. Right: innovation standard deviations."}
+```{r, echo=FALSE, fig.width=6, fig.height=3, fig.cap="Distributions of posterior median station-level parameters."}
+# histogram of median station betas
 p1 <- ggplot(station_params, aes(x = beta)) +
   geom_histogram(bins = 30, fill = "steelblue", color = "white", linewidth = 0.2) +
   labs(x = expression(hat(beta)[k]), y = "Count") +
   theme_minimal()
 
+# histogram of median station sigmas
 p2 <- ggplot(station_params, aes(x = sigma)) +
   geom_histogram(bins = 30, fill = "steelblue", color = "white", linewidth = 0.2) +
   labs(x = expression(hat(sigma)[k]), y = "Count") +
@@ -265,36 +247,42 @@ p2 <- ggplot(station_params, aes(x = sigma)) +
 gridExtra::grid.arrange(p1, p2, ncol = 2)
 ```
 
-In large part, the posterior distribution of 
+In large part, the distribution of the median $\hat{\beta_k}$'s is centered around the population mean. However, there are a few stastion coefficients located in the tails. The $\hat{\sigma_k}$'s are similarly quite tightly distributed with some parameters located in the tails, despite being modeled as independent of one another. Figure 3 plots median $\hat{\beta_k}$ against $\hat{\sigma_k}$ by station. Stations are visually grouped using a simple hierarchical agglomerative clustering algorithm for ease of interpretability.
 
-```{r, echo=FALSE, fig.width=5, fig.height=4, fig.cap="Station-level posterior median AR(1) coefficient vs. innovation standard deviation."}
-ggplot(station_params, aes(x = beta, y = sigma)) +
-  geom_point(color = "steelblue", alpha = 0.7) +
-  labs(x = expression(hat(beta)[k]), y = expression(hat(sigma)[k])) +
-  theme_minimal()
-```
-
-```{r, echo=FALSE}
-# Hierarchical clustering on (beta, sigma)
+```{r, echo=FALSE, fig.width=3.5, fig.height=2.5, fig.cap="Station-level posterior median AR coefficient vs. innovation term."}
+# Hierarchical agglomerative clustering
 clust_mat <- station_params |> select(beta, sigma) |> scale()
 rownames(clust_mat) <- station_params$stationname
 hc <- hclust(dist(clust_mat), method = "ward.D2")
 
-# --- Set number of clusters here ---
+# set number of clusters
 n_clusters <- 6
 
+# append cluster assingments to station_param df
 station_params <- station_params |>
   mutate(cluster = factor(cutree(hc, k = n_clusters)))
-```
 
-```{r, echo=FALSE, fig.width=5, fig.height=4, fig.cap="Station-level posterior medians colored by cluster assignment."}
+# plot scatter of beta vs. sigma with colored cluster assignments
 ggplot(station_params, aes(x = beta, y = sigma, color = cluster)) +
   geom_point(alpha = 0.7, size = 2) +
   labs(x = expression(hat(beta)[k]), y = expression(hat(sigma)[k]),
-       color = "Cluster") +
+       color = "Group") +
   theme_minimal()
 
+#write CSV
 write_csv(station_params, "../data/clean/cta-cluster.csv")
 ```
 
+Here, we can see 3 groups of outliers (groups 4, 5, and 6). Group 4 includes 2 stations (Dempster-Skokie and Oakton-Skokie) and Group 6 includes 3 stations (UIC-Halsted, Clinton-Forest Park, and Racine). Both these groups experienced weeks in the modeled time period where weekly ridership was extremely low, or 0 (as was mentioned in Section III.) due to construction or closure of stations for safety reasons. This phenomenon generates a log-difference in the data that bounces from a very negative value as the station closes to a very positive value as the station opens back up, which inflates the estimated variance and $\text{AR}$ coefficient of the series positively. In a future version of this project, this could be dealt with using a more comprehensive imputation strategy during data processing. Group 5 is a more interesting grouping of Sox-35th-Dan Ryan, Addison-North Main, and Linden. The former two stations serve baseball stadiums Rate Field and Wrigley Field, and so experience higher variance and lower persistence in their series likely due to their relatively infrequent high ridership events that fail to persist.
+
+Groups 1, 2, and 3 describe a gradient for the bulk of CTA "L" stations that go from "relatively strong mean reversion and low variability" (group 2) to "relatively weaker mean reversion and higher variability" (group 3). Group 1 contains the largest number of stations and sits squarely atop the population central values. 
+
 ## V. Conclusion
+There a few limitations of this project. First, the categorization process of a simple deterministic clustering algorithm does not propagate uncertainty through the model. However, given the clustering assignment are an exercise in interpretability of the underlying dynamics of stations' ridership, quantifying uncertainty in this way might not be valuable. Another limitation is that seasonality is likely not well modeled. From Figure 1, it is clear that towards the end of the calendar year, there is larger week-to-week variability while the model only accounts for monthly seasonality. A modification to that component of the model would allow more flexibility to account for these seasonal week effects.
+
+Extensions, in addition to addressing the limitations, are also possible. First, the ICAR prior could be imposed on the hierarchical innovation terms in addition to the $\text{AR}$ coefficient. This would allow spatial smoothing to variance, which makes intuitive sense (variance at one station likely provides information about variance at an adjacent station in the network). Line-level hierarchy could also be implemented into the model such that stations that share a line partially pool information in addition to the population partial pooling. Finally, additional work could be done to determine the effect the ICAR prior has on categorization of stations through spatial smoothing of coefficients.
+
+## Acknowledgements
+Coding (in particular data cleaning and visualization) and project repository organization assistance was provided by Claude (Anthropic). All written work (in this report and in-line code comments) are my own.
+
+[^morris]: Morris, M. (2019). *Spatial Models in Stan: Intrinsic Auto-Regressive Models for Areal Data*. Stan Case Studies. <https://mc-stan.org/users/documentation/case-studies/icar_stan.html>

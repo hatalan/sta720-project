@@ -49,7 +49,7 @@ stations <- read_csv("../data/clean/station-lookup.csv")
 
 ## I. Introduction
 
-This applied project implements a Bayesian hierarchical AR(1) model on weekly network transit data from the Chicago Transit Authority (CTA)'s "L" subway system. In Section II (a), motivation for the project is explained (in particular, the thinking behind the choice of this model versus other time series models such as a VAR), in (b) the placement of the model in the Bayesian setting, and in (c) the details of implementation of inference in the probabilistic programming language Stan in addition to a brief presentation of the model run with simulated data. Section III explains data processing choices. Section IV reports results of the model applied to the CTA "L" data. Section V concludes the report by discussing limitations and possible extensions of this project.
+This applied project implements a Bayesian hierarchical AR(1) model on weekly network transit data from the Chicago Transit Authority (CTA)'s "L" subway system. In Section II (a), motivation for the project is explained (in particular, the thinking behind the choice of this model versus other time series models such as a VAR), in (b) the placement of the model in the Bayesian setting, and in (c) the details of implementation of inference in the probabilistic programming language Stan in addition to a brief presentation of the model run with simulated data. Section III explains data processing choices. Section IV reports results of the model applied to the CTA "L" data. Section V concludes the report by discussing limitations and possible extensions of this project. The github repository for this project is located [here](https://github.com/hatalan/sta720-project).
 
 ## II. Methods
 

@@ -1,6 +1,5 @@
-# Data (lives on cluster)
+# Raw data (lives on cluster - clean data is small enough to go up)
 data/raw/*
-data/clean/*
 !data/raw/.gitkeep
 !data/clean/.gitkeep
 

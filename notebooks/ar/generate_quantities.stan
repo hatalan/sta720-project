@@ -3,21 +3,21 @@ data {
   int<lower=1> K;
   matrix[T, K] Y;
 
-  int<lower=1> P;            // number of seasonal predictors
-  matrix[T, P] X;            // seasonal design matrix
+  int<lower=1> P;            
+  matrix[T, P] X;            
   
   int<lower=1> N_check;
   array[N_check] int<lower=1, upper=K> check_idx;
 }
 
 parameters {
-  real gamma;                   // population mean intercept
-  vector[K] c_zero;              // station intercept deviations
-  real<lower=0> sigma_c;        // SD on intercept deviations
+  real gamma;                
+  vector[K] c_zero;             
+  real<lower=0> sigma_c;   
 
-  real delta;                   // population mean AR coefficient
-  vector[K] phi_zero;            // station spatial coefficient deviations
-  real<lower=0> sigma_phi;      // SD on spatial coefficient deviations
+  real delta;                  
+  vector[K] phi_zero;           
+  real<lower=0> sigma_phi;      
   
   vector<lower=0>[K] sigma;
 

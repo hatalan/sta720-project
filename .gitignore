@@ -1,11 +1,7 @@
-# Raw data (lives on cluster - clean data is small enough to go up)
+# Data
 data/raw/*
 !data/raw/.gitkeep
 !data/clean/.gitkeep
-
-# SLURM logs
-slurm/logs/*
-!slurm/logs/.gitkeep
 
 # Model output
 results/*

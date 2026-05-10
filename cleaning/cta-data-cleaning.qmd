@@ -9,7 +9,7 @@ execute:
   message: false
 ---
 
-## Load data
+## Load packages
 
 ```{r setup}
 library(tidyverse)

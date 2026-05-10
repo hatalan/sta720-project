@@ -63,8 +63,7 @@ A $\text{VAR}$ model was also considered as a possible candidate for modeling, w
 
 ### b. Model
 
-We now explain the full specification of the hierarchical $\text{AR}(1)$ process (all concrete hyper priors are from the variant of the model used on the CTA "L" data set). For node $k \in \{1, \ldots, K\}$ at time $t \in \{2, \ldots, T\}$, we model usage $Y_{t,k}$ as $$Y_{t,k} \mid Y_{t-1,k}, c_k, \beta_k, \boldsymbol{\eta}, \sigma_k \sim \mathcal{N}\left(c_k + \beta_k Y_{t-1,k} + \mathbf{x}_t^\top \boldsymbol{\eta}, \, \sigma_k^2\right),$$
-where $c_k$ is a node-specific intercept, $\beta_k$ is a node-specific $\text{AR}$ coefficient, $\mathbf{x}_t \in \mathbb{R}^P$ is a vector of seasonal indicators (monthly, with January as a baseline), $\boldsymbol{\eta} \in \mathbb{R}^P$ are population-level shared seasonal effects, and $\sigma_k$ is a node-specific innovation term. Node-level intercepts $c_k$ are modeled in a straight-forward hierarchical manner, where each $c_k$ is the sum of a population-level mean intercept $\gamma$ and some node-specific deviation $\tilde{c}_k$, $$c_k = \gamma + \sigma_c \, \tilde{c}_k, \qquad \tilde{c}_k \sim \mathcal{N}(0, 1).$$ Similarly, node-specific $\text{AR}$ coefficients are modeled hierarchically as a population mean $\delta$ plus some deviation $\tilde{\phi}_k$, $$\beta_k = \delta + \sigma_\phi \, \tilde{\phi}_k.$$ but following Morris (2019)[^1], this deviation is spatially smoothed by enforcing an intrinsic conditional AR (ICAR) prior on $\tilde{\boldsymbol{\phi}}$ from the transit network graph structure, with the log density $$-\frac{1}{2} \left(\sum_{i\sim j} (\tilde{\phi}_i - \tilde{\phi}_j)^2\right) + \text{const}.$$ where $i\sim j$ if nodes $i, j$ are connected in the network. Since $\tilde{\boldsymbol{\phi}}$ is unidentifiable, we enforce a soft sum-to-zero constraint on $\tilde{\boldsymbol{\phi}}$ $$\sum_{k=1}^K \tilde{\phi}_k \sim \mathcal{N}(0, 0.001 K).$$ Station-level innovation terms $\sigma_k$ are given independent half-normal priors: $$\sigma_k \sim \mathcal{N}_+(0, 1).$$ The population-level and variance hyperpriors are weakly-informative, but are constructed so as to ensure the prior predictive distribution can reasonably be expected to be stationary: $$
+We now explain the full specification of the hierarchical $\text{AR}(1)$ process (all concrete hyper priors are from the variant of the model used on the CTA "L" data set). For node $k \in \{1, \ldots, K\}$ at time $t \in \{2, \ldots, T\}$, we model usage $Y_{t,k}$ as $$Y_{t,k} \mid Y_{t-1,k}, c_k, \beta_k, \boldsymbol{\eta}, \sigma_k \sim \mathcal{N}\left(c_k + \beta_k Y_{t-1,k} + \mathbf{x}_t^\top \boldsymbol{\eta}, \, \sigma_k^2\right),$$ where $c_k$ is a node-specific intercept, $\beta_k$ is a node-specific $\text{AR}$ coefficient, $\mathbf{x}_t \in \mathbb{R}^P$ is a vector of seasonal indicators (monthly, with January as a baseline), $\boldsymbol{\eta} \in \mathbb{R}^P$ are population-level shared seasonal effects, and $\sigma_k$ is a node-specific innovation term. Node-level intercepts $c_k$ are modeled in a straight-forward hierarchical manner, where each $c_k$ is the sum of a population-level mean intercept $\gamma$ and some node-specific deviation $\tilde{c}_k$, $$c_k = \gamma + \sigma_c \, \tilde{c}_k, \qquad \tilde{c}_k \sim \mathcal{N}(0, 1).$$ Similarly, node-specific $\text{AR}$ coefficients are modeled hierarchically as a population mean $\delta$ plus some deviation $\tilde{\phi}_k$, $$\beta_k = \delta + \sigma_\phi \, \tilde{\phi}_k.$$ but following Morris (2019)[^1], this deviation is spatially smoothed by enforcing an intrinsic conditional AR (ICAR) prior on $\tilde{\boldsymbol{\phi}}$ from the transit network graph structure, with the log density $$-\frac{1}{2} \left(\sum_{i\sim j} (\tilde{\phi}_i - \tilde{\phi}_j)^2\right) + \text{const}.$$ where $i\sim j$ if nodes $i, j$ are connected in the network. Since $\tilde{\boldsymbol{\phi}}$ is unidentifiable, we enforce a soft sum-to-zero constraint on $\tilde{\boldsymbol{\phi}}$ $$\sum_{k=1}^K \tilde{\phi}_k \sim \mathcal{N}(0, 0.001 K).$$ Station-level innovation terms $\sigma_k$ are given independent half-normal priors: $$\sigma_k \sim \mathcal{N}_+(0, 1).$$ The population-level and variance hyperpriors are weakly-informative, but are constructed so as to ensure the prior predictive distribution can reasonably be expected to be stationary: $$
 \begin{aligned}
 \gamma &\sim \mathcal{N}(0, 1), \\
 \delta &\sim \mathcal{N}(0.3, 0.3), \\
@@ -234,13 +233,13 @@ station_params <- tibble(
 ```
 
 ```{r, echo=FALSE, fig.width=6, fig.height=3, fig.cap="Distributions of posterior median station-level parameters."}
-# histogram of median station betas
+# Histogram of median station betas
 p1 <- ggplot(station_params, aes(x = beta)) +
   geom_histogram(bins = 30, fill = "steelblue", color = "white", linewidth = 0.2) +
   labs(x = expression(hat(beta)[k]), y = "Count") +
   theme_minimal()
 
-# histogram of median station sigmas
+# Histogram of median station sigmas
 p2 <- ggplot(station_params, aes(x = sigma)) +
   geom_histogram(bins = 30, fill = "steelblue", color = "white", linewidth = 0.2) +
   labs(x = expression(hat(sigma)[k]), y = "Count") +
@@ -257,21 +256,21 @@ clust_mat <- station_params |> select(beta, sigma) |> scale()
 rownames(clust_mat) <- station_params$stationname
 hc <- hclust(dist(clust_mat), method = "ward.D2")
 
-# set number of clusters
+# Set number of clusters
 n_clusters <- 6
 
-# append cluster assingments to station_param df
+# Append cluster assingments to station_param df
 station_params <- station_params |>
   mutate(cluster = factor(cutree(hc, k = n_clusters)))
 
-# plot scatter of beta vs. sigma with colored cluster assignments
+# Plot scatter of beta vs. sigma with colored cluster assignments
 ggplot(station_params, aes(x = beta, y = sigma, color = cluster)) +
   geom_point(alpha = 0.7, size = 2) +
   labs(x = expression(hat(beta)[k]), y = expression(hat(sigma)[k]),
        color = "Group") +
   theme_minimal()
 
-#write CSV
+# Write CSV
 write_csv(station_params, "../data/clean/cta-cluster.csv")
 ```
 

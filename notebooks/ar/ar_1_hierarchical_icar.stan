@@ -9,13 +9,13 @@ data {
 }
 
 parameters {
-  real gamma;                   // population mean intercept
-  vector[K] c_zero;              // station intercept deviations
-  real<lower=0> sigma_c;        // SD on intercept deviations
+  real gamma;               
+  vector[K] c_zero;          
+  real<lower=0> sigma_c;      
 
-  real delta;                   // population mean AR coefficient
-  vector[K] phi_zero;            // station spatial coefficient deviations
-  real<lower=0> sigma_phi;      // SD on spatial coefficient deviations
+  real delta;              
+  vector[K] phi_zero;         
+  real<lower=0> sigma_phi;    
   
   vector<lower=0>[K] sigma;
 }
@@ -26,11 +26,11 @@ transformed parameters {
 }
 
 model {
-  gamma ~ normal(0, 1); // population mean intercept hyperprior
-  delta ~ normal(0.3, 0.3); // population mean AR coefficient hyperprior
+  gamma ~ normal(0, 1); 
+  delta ~ normal(0.3, 0.3); 
   
-  sigma_c ~ normal(0, 1); // population intercept SD hyperprior
-  sigma_phi ~ normal(0, 0.3); // population AR coefficient SD hyperprior
+  sigma_c ~ normal(0, 1); 
+  sigma_phi ~ normal(0, 0.3); 
   
   c_zero ~ normal(0, 1);
   
@@ -38,7 +38,7 @@ model {
   target += -0.5 * dot_self(phi_zero[node1] - phi_zero[node2]);
   sum(phi_zero) ~ normal(0, 0.001 * K);
   
-  sigma ~ normal(0, 1); // simple half-normal prior on innovation
+  sigma ~ normal(0, 1); 
   
   // Likelihood
   for (k in 1:K) {
